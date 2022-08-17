@@ -4,28 +4,25 @@
 #include <esvo_core/container/DepthMap.h>
 #include <esvo_core/core/DepthProblem.h>
 #include <memory>
-namespace esvo_core
-{
+namespace esvo_core {
 using namespace container;
-namespace core
-{
-class DepthRegularization
-{
+namespace core {
+class DepthRegularization {
 public:
-  typedef std::shared_ptr<DepthRegularization> Ptr;
+    typedef std::shared_ptr<DepthRegularization> Ptr;
 
-  DepthRegularization(std::shared_ptr<DepthProblemConfig> & dpConfigPtr);
-  virtual ~DepthRegularization();
+    DepthRegularization(std::shared_ptr<DepthProblemConfig> &dpConfigPtr);
+    virtual ~DepthRegularization();
 
-  void apply( DepthMap::Ptr & depthMapPtr );
+    void apply(DepthMap::Ptr &depthMapPtr);
 
 private:
-  std::shared_ptr<DepthProblemConfig> dpConfigPtr_;
-  size_t _regularizationRadius;
-  size_t _regularizationMinNeighbours;
-  size_t _regularizationMinCloseNeighbours;
+    std::shared_ptr<DepthProblemConfig> dpConfigPtr_;
+    size_t                              _regularizationRadius;
+    size_t                              _regularizationMinNeighbours;
+    size_t                              _regularizationMinCloseNeighbours;
 };
-}// core
-}// esvo_core
+} // namespace core
+} // namespace esvo_core
 
-#endif //ESVO_CORE_CORE_DEPTHREGULARIZATION_H
+#endif // ESVO_CORE_CORE_DEPTHREGULARIZATION_H
