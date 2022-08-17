@@ -12,7 +12,7 @@ catkin_simple(ALL_DEPS_REQUIRED)
 
 # SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3")
 
-set(OpenCV_DIR "/usr/local/opencv4.5.5/lib/cmake/opencv4/")
+set(OpenCV_DIR "/usr/lib/x86_64-linux-gnu/cmake/opencv4/")
 find_package(OpenCV REQUIRED)
 
 include_directories(include ${catkin_INCLUDE_DIRS})
