@@ -9,6 +9,7 @@ set(CMAKE_CXX_FLAGS "-O3")
 find_package(catkin_simple REQUIRED)
 catkin_simple(ALL_DEPS_REQUIRED)
 
+set(OpenCV_DIR "/usr/local/opencv4.5.5/lib/cmake/opencv4/")
 find_package(OpenCV REQUIRED)
 
 ###########
