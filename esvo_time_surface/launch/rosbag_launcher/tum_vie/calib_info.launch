@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<launch>
+
+    <!-- Publish stereo camera calibration on predefined ROS topics -->
+  <node name="davis_left_cam_info_pub" pkg="rostopic" type="rostopic"
+    args="pub /davis/left/camera_info sensor_msgs/CameraInfo
+    '{header: {seq: 0, stamp: {secs: 0, nsecs: 0}, frame_id: ''},
+    height: 720, width: 1280, distortion_model: 'equidistant',
+    D: [-0.13104704164707634, 0.07279844505754081, -0.21109298825047648, 0.18493426446978858],
+    K: [1051.3170714099033, 0, 636.1348547903337,
+        0, 1051.7952009807022, 265.7059221322115,
+        0, 0, 1],
+    R: [0.9998228165348589, -0.01683908803476967, -0.008413123704025326,
+        0.01692490916354748, 0.9998043669069874, 0.01023598375945934,
+        0.00823911318696521, -0.01037656146686003, 0.9999122181401811],
+    P: [995.5549924749374, 0, 668.5699125099407, 0,
+        0, 995.5549924749374, 241.2581891754772, 0,
+        0, 0, 1, 0],
+    binning_x: 0, binning_y: 0,
+    roi: {x_offset: 0, y_offset: 0, height: 0, width: 0, do_rectify: false} }' -r 1000" />
+
+  <node name="davis_right_cam_info_pub" pkg="rostopic" type="rostopic"
+    args="pub /davis/right/camera_info sensor_msgs/CameraInfo
+    '{header: {seq: 0, stamp: {secs: 0, nsecs: 0}, frame_id: ''},
+    height: 720, width: 1280, distortion_model: 'equidistant',
+    D: [-0.12160659649371726, 0.011651206770983776, -0.04866892385445637, 0.039710386685279195],
+    K: [1049.048422241493, 0, 652.4780618014456,
+        0, 1049.5741104057763, 262.0071641027953,
+        0, 0, 1],
+    R: [0.9998228165348589, -0.01683908803476967, -0.008413123704025326,
+        0.01692490916354748, 0.9998043669069874, 0.01023598375945934,
+        0.00823911318696521, -0.01037656146686003, 0.9999122181401811],
+    P: [995.5549924749374, 0, 668.5699125099407, -118.2902963459097,
+        0, 995.5549924749374, 241.2581891754772, 0,
+        0, 0, 1, 0],
+    binning_x: 0, binning_y: 0,
+    roi: {x_offset: 0, y_offset: 0, height: 0, width: 0, do_rectify: false} }' -r 1000" />
+
+</launch>

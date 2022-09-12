@@ -2,7 +2,7 @@
   <!-- ROS BAG -->
   <rosparam param="/use_sim_time">true</rosparam>
   <node pkg="rosbag" type="play" name="play" output="screen" required="true"
-    args="/home/zhouyi/workspace/dataset/DVS/DSEC/zurich_city_04_a/zurich_city_04_a_events.bag -r 0.05 -s 5 --clock">
+    args="/media/ubuntu/W/dvs_dataset/dsec/zurish_city_04a/zurish_city_04a.bag -r 0.05 -s 5 --clock">
     <!-- MODIFY THE ABOVE DIRECTORY -->
   </node>
 
