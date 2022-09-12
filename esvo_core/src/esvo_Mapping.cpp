@@ -894,10 +894,12 @@ void esvo_Mapping::publishPointCloud(DepthMap::Ptr &depthMapPtr, Transformation 
             sor.filter(*pc_filtered);
 
             // copy the most current pc tp pc_global
-            size_t pc_length  = pc_filtered->size();
-            size_t numAddedPC = min(pc_length, numAddedPC_threshold_) - 1;
-            pc_global_->insert(pc_global_->end(), pc_filtered->end() - numAddedPC,
-                               pc_filtered->end());
+            size_t pc_length = pc_filtered->size();
+            if (pc_length != 0) {
+                size_t numAddedPC = min(pc_length, numAddedPC_threshold_) - 1;
+                pc_global_->insert(pc_global_->end(), pc_filtered->end() - numAddedPC,
+                                   pc_filtered->end());
+            }
             // publish point cloud
             pcl::toROSMsg(*pc_global_, *pc_to_publish);
             pc_to_publish->header.stamp = t;
