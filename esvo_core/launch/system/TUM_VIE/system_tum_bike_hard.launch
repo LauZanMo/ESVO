@@ -3,12 +3,18 @@
 
     <rosparam param="/use_sim_time">true</rosparam>
 
+    <arg name="cam_config_file" default="$(find esvo_time_surface)/cfg/tum_vie_B.yaml"/>
+
     <!-- Time surfaces generation -->
     <node name="TimeSurface_left" pkg="esvo_time_surface" type="esvo_time_surface">
         <remap from="events" to="/davis/left/events" />
         <remap from="image" to="/davis/left/image_raw" />
         <remap from="camera_info" to="/davis/left/camera_info" />
         <remap from="time_surface" to="TS_left" />
+        <remap from="imu" to="/davis/imu"/>
+
+        <param name="cam_config_file" value="$(arg cam_config_file)" />
+        <param name="cam_idx" value="0" />
 
         <rosparam command="load" file="$(find esvo_core)/cfg/time_surface/ts_parameters.yaml" />
     </node>
@@ -18,6 +24,10 @@
         <remap from="image" to="/davis/right/image_raw" />
         <remap from="camera_info" to="/davis/right/camera_info" />
         <remap from="time_surface" to="TS_right" />
+        <remap from="imu" to="/davis/imu"/>
+
+        <param name="cam_config_file" value="$(arg cam_config_file)" />
+        <param name="cam_idx" value="1" />
 
         <rosparam command="load" file="$(find esvo_core)/cfg/time_surface/ts_parameters.yaml" />
     </node>
@@ -54,10 +64,13 @@
         <remap from="gt_pose" to="/optitrack/davis_stereo" />
         <remap from="events_left" to="/davis/left/events" />
         <remap from="pointcloud" to="/esvo_mapping/pointcloud_local" />
+        <remap from="imu" to="/davis/imu"/>
 
         <rosparam param="dvs_frame_id">"dvs"</rosparam>
         <rosparam param="world_frame_id">"map"</rosparam>
         <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
+
+        <param name="cam_config_file" value="$(arg cam_config_file)" />
 
         <rosparam command="load" file="$(find esvo_core)/cfg/tracking/tracking_tum.yaml" />
     </node>

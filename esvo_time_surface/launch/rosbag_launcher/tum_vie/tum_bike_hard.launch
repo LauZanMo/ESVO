@@ -4,10 +4,10 @@
     <!-- ROS BAG -->
     <rosparam param="/use_sim_time">true</rosparam>
     <node pkg="rosbag" type="play" name="play" output="screen" required="true"
-        args="/media/ubuntu/W/dvs_dataset/tum_vie/bike_hard/bike-hard-events.bag -r 0.05 --clock">
+        args="/home/ubuntu/Dataset/dvs/tum_vie/bike_hard/bike-hard-events_1.bag -r 0.05 -s 35 --clock">
         <!-- MODIFY THE ABOVE DIRECTORY -->
     </node>
 
-    <!-- <include file="$(find esvo_time_surface)/launch/rosbag_launcher/tum_vie/calib_info.launch"/> -->
+    <include file="$(find esvo_time_surface)/launch/rosbag_launcher/tum_vie/calib_info.launch"/>
     
 </launch>
