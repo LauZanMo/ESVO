@@ -206,6 +206,7 @@ private:
     /******************** For test & debug ********************/
     /**********************************************************/
     image_transport::Publisher invDepthMap_pub_, stdVarMap_pub_, ageMap_pub_, costMap_pub_;
+    image_transport::Publisher debug_pub_;
 
     // For counting the total number of fusion
     size_t TotalNumFusion_;

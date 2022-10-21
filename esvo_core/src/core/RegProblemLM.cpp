@@ -222,12 +222,12 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     // assemble with dG_dtheta
     fjac = -fjacBlock * J_G_0_;
     // The explanation for the factor -1 is as follows. The transformation recovered from dThetha
-    // is T_right_left (R_, t_). However, the one used for warping is T_left_right (R_.transpose(),
+    // is T_ref_cur (R_, t_). However, the one used for warping is T_cur_ref (R_.transpose(),
     // -R.transpose() * t). Thus, R_.transpose() is used as dT_dInvPi. Besides, J_theta = dPi_dT *
     // dT_dG' * dG'_dG * dG_dtheta. G'(dtheta) recovers the motion for the warping, namely
     // R_.transpose(), -R.transpose() * t.
     //          /                                 \
-  //          | 1 0 0 0 0 0 0 0 0       | 0 0 0 |
+    //          | 1 0 0 0 0 0 0 0 0       | 0 0 0 |
     //          | 0 0 0 1 0 0 0 0 0       | 0 0 0 |
     //          | 0 0 0 0 0 0 1 0 0       | 0 0 0 |
     //          | 0 1 0 0 0 0 0 0 0       | 0 0 0 |

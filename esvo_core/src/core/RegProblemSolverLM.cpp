@@ -1,6 +1,11 @@
 #include <esvo_core/core/RegProblemSolverLM.h>
 #include <esvo_core/tools/cayley.h>
 
+#ifdef SAVE_DUBUG_INFO
+#include <evaluation/DebugValueSaver.h>
+int track_idx = 0;
+#endif
+
 namespace esvo_core {
 namespace core {
 RegProblemSolverLM::RegProblemSolverLM(esvo_core::CameraSystem::Ptr   &camSysPtr,
@@ -141,6 +146,8 @@ bool RegProblemSolverLM::solve_analytical() {
 
     size_t iteration = 0;
     size_t nfev      = 0;
+
+    std::vector<Eigen::Vector<double, 6>> iter_values;
     while (true) {
         if (iteration >= rpConfigPtr_->MAX_ITERATION_)
             break;
@@ -155,6 +162,7 @@ bool RegProblemSolverLM::solve_analytical() {
         }
         Eigen::LevenbergMarquardtSpace::Status status = lm.minimizeOneStep(x);
         regProblemPtr_->addMotionUpdate(x);
+        iter_values.push_back(x);
 
         iteration++;
         nfev += lm.nfev;
@@ -162,6 +170,7 @@ bool RegProblemSolverLM::solve_analytical() {
             break;
     }
 
+    cv::Mat_<uint8_t> proj_img, proj_img_init;
     /*************************** Visualization ************************/
     if (bVisualize_) // will slow down the tracker a little bit
     {
@@ -171,6 +180,7 @@ bool RegProblemSolverLM::solve_analytical() {
         cv::eigen2cv(regProblemPtr_->cur_->pTsObs_->TS_negative_left_, reprojMap_left);
         reprojMap_left.convertTo(reprojMap_left, CV_8UC1);
         cv::cvtColor(reprojMap_left, reprojMap_left, CV_GRAY2BGR);
+        cv::Mat reproj_map_left_init = reprojMap_left.clone();
 
         // project 3D points to current frame
         Eigen::Matrix3d R_cur_ref = regProblemPtr_->R_.transpose();
@@ -185,13 +195,37 @@ bool RegProblemSolverLM::solve_analytical() {
             double z = ri.p_[2];
             visualizor_.DrawPoint(1.0 / z, 1.0 / z_min_, 1.0 / z_max_,
                                   Eigen::Vector2d(p_img_left(0), p_img_left(1)), reprojMap_left);
+#ifdef SAVE_DUBUG_INFO
+            camSysPtr_->cam_left_ptr_->world2Cam(ri.p_, p_img_left);
+            visualizor_.DrawPoint(1.0 / z, 1.0 / z_min_, 1.0 / z_max_,
+                                  Eigen::Vector2d(p_img_left(0), p_img_left(1)),
+                                  reproj_map_left_init);
+#endif
         }
         std_msgs::Header header;
         header.stamp              = regProblemPtr_->cur_->t_;
         sensor_msgs::ImagePtr msg = cv_bridge::CvImage(header, "bgr8", reprojMap_left).toImageMsg();
         reprojMap_pub_->publish(msg);
+        proj_img      = reprojMap_left;
+        proj_img_init = reproj_map_left_init;
     }
     /*************************** Visualization ************************/
+
+#ifdef SAVE_DUBUG_INFO
+    Eigen::Vector<double, 6> final_values;
+    final_values.segment<3>(0) = tools::rot2cayley(regProblemPtr_->R_);
+    final_values.segment<3>(3) = regProblemPtr_->t_;
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/delta_" + std::to_string(track_idx),
+                 iter_values);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/final_" + std::to_string(track_idx),
+                 final_values);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/proj_map_" + std::to_string(track_idx),
+                 proj_img);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/proj_map_init_" + std::to_string(track_idx),
+                 proj_img_init);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/size", ++track_idx,
+                 H5Easy::DumpMode::Overwrite);
+#endif
 
     regProblemPtr_->setPose();
     lmStatics_.nPoints_ = regProblemPtr_->numPoints_;

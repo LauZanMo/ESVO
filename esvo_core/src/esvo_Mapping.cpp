@@ -19,7 +19,7 @@
 #include <utility>
 
 //#define ESVO_CORE_MAPPING_DEBUG
-//#define ESVO_CORE_MAPPING_LOG
+#define ESVO_CORE_MAPPING_LOG
 
 namespace esvo_core {
 esvo_Mapping::esvo_Mapping(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
@@ -146,6 +146,7 @@ esvo_Mapping::esvo_Mapping(const ros::NodeHandle &nh, const ros::NodeHandle &nh_
     stdVarMap_pub_   = it_.advertise("Standard_Variance_Map", 1);
     ageMap_pub_      = it_.advertise("Age_Map", 1);
     costMap_pub_     = it_.advertise("cost_map", 1);
+    debug_pub_       = it_.advertise("debug", 1);
     pc_pub_          = nh_.advertise<PointCloud>("/esvo_mapping/pointcloud_local", 1);
     if (bVisualizeGlobalPC_) {
         gpc_pub_ = nh_.advertise<PointCloud>("/esvo_mapping/pointcloud_global", 1);
@@ -384,34 +385,26 @@ void esvo_Mapping::MappingAtTime(const ros::Time &t) {
     tPublishMappingResult.detach();
 
 #ifdef ESVO_CORE_MAPPING_LOG
-    LOG(INFO) << "\n";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "--------------Computation Cost (Mapping)---------------------";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "Denoising: " << t_BM_denoising << " ms, ("
-              << t_BM_denoising / t_overall_count * 100 << "%).";
-    LOG(INFO) << "Block Matching (BM): " << t_BM << " ms, (" << t_BM / t_overall_count * 100
-              << "%).";
-    LOG(INFO) << "BM success ratio: " << vEMP.size() << "/" << totalNumCount_
-              << "(Successes/Total).";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "Update: " << t_optimization << " ms, (" << t_optimization / t_overall_count * 100
-              << "%).";
-    LOG(INFO) << "-- nonlinear optimization: " << t_solve << " ms, ("
-              << t_solve / t_overall_count * 100 << "%).";
-    LOG(INFO) << "-- fusion (" << numFusionCount << ", " << TotalNumFusion_ << "): " << t_fusion
-              << " ms, (" << t_fusion / t_overall_count * 100 << "%).";
-    LOG(INFO) << "-- regularization: " << t_regularization << " ms, ("
-              << t_regularization / t_overall_count * 100 << "%).";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "Total Computation (" << depthFramePtr_->dMap_->size() << "): " << t_overall_count
+    LOG(INFO) << std::endl
+              << "Computation Cost (Mapping)" << std::endl
+              << "Denoising: " << t_BM_denoising << " ms, ("
+              << t_BM_denoising / t_overall_count * 100 << "%)." << std::endl
+              << "Block Matching (BM): " << t_BM << " ms, (" << t_BM / t_overall_count * 100
+              << "%)." << std::endl
+              << "BM success ratio: " << vEMP.size() << "/" << totalNumCount_
+              << "(Successes/Total)." << std::endl
+              << "------------------------------------------------------------" << std::endl
+              << "Update: " << t_optimization << " ms, (" << t_optimization / t_overall_count * 100
+              << "%)." << std::endl
+              << "-- nonlinear optimization: " << t_solve << " ms, ("
+              << t_solve / t_overall_count * 100 << "%)." << std::endl
+              << "-- fusion (" << numFusionCount << ", " << TotalNumFusion_ << "): " << t_fusion
+              << " ms, (" << t_fusion / t_overall_count * 100 << "%)." << std::endl
+              << "-- regularization: " << t_regularization << " ms, ("
+              << t_regularization / t_overall_count * 100 << "%)." << std::endl
+              << "------------------------------------------------------------" << std::endl
+              << "Total Computation (" << depthFramePtr_->dMap_->size() << "): " << t_overall_count
               << " ms.";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "------------------------------END---------------------------";
-    LOG(INFO) << "------------------------------------------------------------";
-    LOG(INFO) << "\n";
 #endif
 }
 
