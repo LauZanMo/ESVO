@@ -23,16 +23,16 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
     T_world_ref_               = ref_->tr_.getTransformationMatrix();
     T_world_left_              = cur_->tr_.getTransformationMatrix();
     Eigen::Matrix4d T_ref_left = T_world_ref_.inverse() * T_world_left_;
-    R_ref_cur_                 = T_ref_left.block<3, 3>(0, 0);
-    t_ref_cur_                 = T_ref_left.block<3, 1>(0, 3);
-    R_                         = R_ref_cur_;
-    t_                         = t_;
+    R_                         = T_ref_left.block<3, 3>(0, 0);
+    t_                         = T_ref_left.block<3, 1>(0, 3);
+    // R_                         = R_ref_cur_;
+    // t_                         = t_;
 
-    // T_w_bi_                  = T_world_ref_ * camSysPtr_->T_C_B_;
-    // T_w_bj_                  = T_world_left_ * camSysPtr_->T_C_B_;
-    // Eigen ::Matrix4d T_bi_bj = T_w_bi_.inverse() * T_w_bj_;
-    // R_                       = T_bi_bj.block<3, 3>(0, 0);
-    // t_                       = T_bi_bj.block<3, 1>(0, 3);
+    T_w_bi_                  = T_world_ref_ * camSysPtr_->T_C_B_;
+    T_w_bj_                  = T_world_left_ * camSysPtr_->T_C_B_;
+    Eigen ::Matrix4d T_bi_bj = T_w_bi_.inverse() * T_w_bj_;
+    R_bi_bj_                 = T_bi_bj.block<3, 3>(0, 0);
+    t_bi_bj_                 = T_bi_bj.block<3, 1>(0, 3);
 
     Eigen::Matrix3d R_world_ref = T_world_ref_.block<3, 3>(0, 0);
     Eigen::Vector3d t_world_ref = T_world_ref_.block<3, 1>(0, 3);
@@ -181,9 +181,12 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
 
     // change 2
     Eigen::Matrix4d T_left_ref   = Eigen::Matrix4d::Identity();
-    T_left_ref.block<3, 3>(0, 0) = R_.transpose();
-    T_left_ref.block<3, 1>(0, 3) = -R_.transpose() * t_;
-    // T_left_ref                   = camSysPtr_->T_C_B_ * T_left_ref.eval() * camSysPtr_->T_B_C_;
+    T_left_ref.block<3, 3>(0, 0) = R_bi_bj_.transpose();
+    T_left_ref.block<3, 1>(0, 3) = -R_bi_bj_.transpose() * t_bi_bj_;
+    T_left_ref                   = camSysPtr_->T_C_B_ * T_left_ref.eval() * camSysPtr_->T_B_C_;
+
+    Eigen::Matrix3d R_B_C = camSysPtr_->T_B_C_.block<3, 3>(0, 0);
+    Eigen::Vector3d t_B_C = camSysPtr_->T_B_C_.block<3, 1>(0, 3);
 
     Eigen::Matrix3d             dT_dInvPi = T_left_ref.block<3, 3>(0, 0);
     Eigen::Matrix<double, 3, 2> dInvPi_dx_constPart;
@@ -241,9 +244,9 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
 
             // change 1
             Eigen::Matrix<double, 3, 6> dT_dTheta;
-            Eigen::Vector3d             temp_v = R_.transpose() * (ri.p_ - t_);
-            dT_dTheta.block<3, 3>(0, 0)        = skewSymmetric(temp_v);
-            dT_dTheta.block<3, 3>(0, 3)        = -R_.transpose();
+            Eigen::Vector3d temp_v = R_bi_bj_.transpose() * (R_B_C * (ri.p_ + t_B_C) - t_bi_bj_);
+            dT_dTheta.block<3, 3>(0, 0) = R_B_C.transpose() * skewSymmetric(temp_v);
+            dT_dTheta.block<3, 3>(0, 3) = -R_B_C.transpose() * R_bi_bj_.transpose();
 
             fjacBlock.row(i) =
                 grad.transpose() * dPi_dT * J_constPart * dPi_dT * dT_dTheta * ri.p_(2);
@@ -340,17 +343,17 @@ void RegProblemLM::computeJ_G(const Eigen::Matrix<double, 6, 1> &x,
 void RegProblemLM::getWarpingTransformation(Eigen::Matrix4d                   &warpingTransf,
                                             const Eigen::Matrix<double, 6, 1> &x) const {
     // To calcuate R_cur_ref, t_cur_ref
-    Eigen::Matrix3d R_cur_ref;
-    Eigen::Vector3d t_cur_ref;
+    Eigen::Matrix3d R_bj_bi;
+    Eigen::Vector3d t_bj_bi;
     // get delta cayley paramters (this corresponds to the delta motion of the ref frame)
     Eigen::Vector3d dc = x.block<3, 1>(0, 0);
     Eigen::Vector3d dt = x.block<3, 1>(3, 0);
     // add rotation
     Eigen::Matrix3d                   dR   = tools::cayley2rot(dc);
-    Eigen::Matrix3d                   newR = dR.transpose() * R_.transpose();
+    Eigen::Matrix3d                   newR = dR.transpose() * R_bi_bj_.transpose();
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(newR, Eigen::ComputeFullU | Eigen::ComputeFullV);
-    R_cur_ref = svd.matrixU() * svd.matrixV().transpose();
-    if (R_cur_ref.determinant() < 0.0) {
+    R_bj_bi = svd.matrixU() * svd.matrixV().transpose();
+    if (R_bj_bi.determinant() < 0.0) {
         LOG(INFO) << "oops the matrix is left-handed\n";
         exit(-1);
     }
@@ -358,33 +361,41 @@ void RegProblemLM::getWarpingTransformation(Eigen::Matrix4d                   &w
     // t_cur_ref                       = -R_cur_ref * (dt + dR * t_);
 
     // change 1
-    t_cur_ref = -dR.transpose() * (R_ * t_ + dt);
+    t_bj_bi = -dR.transpose() * (R_bi_bj_ * t_bi_bj_ + dt);
 
     // change 2
-    // Eigen ::Matrix4d T_bj_bi  = Eigen::Matrix4d::Identity();
-    // T_bj_bi.block<3, 3>(0, 0) = R_cur_ref;
-    // T_bj_bi.block<3, 1>(0, 3) = t_cur_ref;
+    Eigen ::Matrix4d T_bj_bi  = Eigen::Matrix4d::Identity();
+    T_bj_bi.block<3, 3>(0, 0) = R_bj_bi;
+    T_bj_bi.block<3, 1>(0, 3) = t_bj_bi;
 
-    warpingTransf.block<3, 3>(0, 0) = R_cur_ref;
-    warpingTransf.block<3, 1>(0, 3) = t_cur_ref;
-    // warpingTransf = camSysPtr_->T_C_B_ * T_bj_bi * camSysPtr_->T_B_C_; // T_cj_ci
+    // warpingTransf.block<3, 3>(0, 0) = R_cur_ref;
+    // warpingTransf.block<3, 1>(0, 3) = t_cur_ref;
+    warpingTransf = camSysPtr_->T_C_B_ * T_bj_bi * camSysPtr_->T_B_C_; // T_cj_ci
 }
 
 void RegProblemLM::addMotionUpdate(const Eigen::Matrix<double, 6, 1> &dx) {
-    // To update R_, t_
+    // To update R_bi_bj_, t_bi_bj_
     Eigen::Vector3d dc = dx.block<3, 1>(0, 0);
     Eigen::Vector3d dt = dx.block<3, 1>(3, 0);
     // 右乘
     Eigen::Matrix3d                   dR   = tools::cayley2rot(dc);
-    Eigen::Matrix3d                   newR = R_ * dR;
+    Eigen::Matrix3d                   newR = R_bi_bj_ * dR;
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(newR, Eigen::ComputeFullU | Eigen::ComputeFullV);
     newR = svd.matrixU() * svd.matrixV().transpose();
     // t_   = dt + newR * R_.transpose() * t_;
-    t_ = newR.transpose() * dR.transpose() * (R_ * t_ + dt);
-    R_ = newR;
+    t_bi_bj_ = newR.transpose() * dR.transpose() * (R_bi_bj_ * t_bi_bj_ + dt);
+    R_bi_bj_ = newR;
 }
 
 void RegProblemLM::setPose() {
+    Eigen::Matrix4d T_ref_cur   = Eigen::Matrix4d::Identity();
+    T_ref_cur.block<3, 3>(0, 0) = R_bi_bj_;
+    T_ref_cur.block<3, 1>(0, 3) = t_bi_bj_;
+    T_ref_cur                   = camSysPtr_->T_C_B_ * T_ref_cur.eval() * camSysPtr_->T_B_C_;
+
+    R_ = T_ref_cur.block<3, 3>(0, 0);
+    t_ = T_ref_cur.block<3, 1>(0, 3);
+
     T_world_left_.block<3, 3>(0, 0) = T_world_ref_.block<3, 3>(0, 0) * R_;
     T_world_left_.block<3, 1>(0, 3) =
         T_world_ref_.block<3, 3>(0, 0) * t_ + T_world_ref_.block<3, 1>(0, 3);
