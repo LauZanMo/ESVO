@@ -18,17 +18,26 @@ RegProblemLM::RegProblemLM(const CameraSystem::Ptr     &camSysPtr,
 }
 
 void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
-    ref_                        = ref;
-    cur_                        = cur;
-    T_world_ref_                = ref_->tr_.getTransformationMatrix();
-    T_world_left_               = cur_->tr_.getTransformationMatrix();
-    Eigen::Matrix4d T_ref_left  = T_world_ref_.inverse() * T_world_left_;
-    R_                          = T_ref_left.block<3, 3>(0, 0);
-    t_                          = T_ref_left.block<3, 1>(0, 3);
+    ref_                       = ref;
+    cur_                       = cur;
+    T_world_ref_               = ref_->tr_.getTransformationMatrix();
+    T_world_left_              = cur_->tr_.getTransformationMatrix();
+    Eigen::Matrix4d T_ref_left = T_world_ref_.inverse() * T_world_left_;
+    R_ref_cur_                 = T_ref_left.block<3, 3>(0, 0);
+    t_ref_cur_                 = T_ref_left.block<3, 1>(0, 3);
+    R_                         = R_ref_cur_;
+    t_                         = t_;
+
+    // T_w_bi_                  = T_world_ref_ * camSysPtr_->T_C_B_;
+    // T_w_bj_                  = T_world_left_ * camSysPtr_->T_C_B_;
+    // Eigen ::Matrix4d T_bi_bj = T_w_bi_.inverse() * T_w_bj_;
+    // R_                       = T_bi_bj.block<3, 3>(0, 0);
+    // t_                       = T_bi_bj.block<3, 1>(0, 3);
+
     Eigen::Matrix3d R_world_ref = T_world_ref_.block<3, 3>(0, 0);
     Eigen::Vector3d t_world_ref = T_world_ref_.block<3, 1>(0, 3);
 
-    // load ref's pointcloud tp vResItem
+    // 根据ref点云初始化残差项
     ResItems_.clear();
     numPoints_ = ref_->vPointXYZPtr_.size();
     if (numPoints_ > rpConfigPtr_->MAX_REGISTRATION_POINTS_)
@@ -37,6 +46,7 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
     if (bPrint_)
         LOG(INFO) << "num points: " << numPoints_;
 
+    // 随机采样，并给残差项三维点赋值(ref系)
     for (size_t i = 0; i < numPoints_; i++) {
         bool bStochasticSampling = true;
         if (bStochasticSampling)
@@ -47,15 +57,16 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
         Eigen::Vector3d p_cam = R_world_ref.transpose() * (p_tmp - t_world_ref);
         ResItems_[i].initialize(p_cam(0), p_cam(1), p_cam(2)); //, var);
     }
-    // for stochastic sampling
+    // 批量
     numBatches_ = std::max(ResItems_.size() / rpConfigPtr_->BATCH_SIZE_, (size_t)1);
 
-    // load cur's info
+    // 获取ts negative并计算梯度图
     pTsObs_ = cur->pTsObs_;
     pTsObs_->getTimeSurfaceNegative(rpConfigPtr_->kernelSize_);
     if (bComputeGrad)
         pTsObs_->computeTsNegativeGrad();
-    // set fval dimension
+
+    // 设置残差项维数(add)
     resetNumberValues(numPoints_ * patchSize_);
     if (bPrint_)
         LOG(INFO) << "RegProblemLM::setProblem succeeds.";
@@ -70,6 +81,7 @@ void RegProblemLM::setStochasticSampling(size_t offset, size_t N) {
         ResItemsStochSampled_.push_back(ResItems_[offset + i]);
     }
     numPoints_ = ResItemsStochSampled_.size();
+    // 设置残差项维数(add)
     resetNumberValues(numPoints_ * patchSize_);
     if (bPrint_) {
         LOG(INFO) << "offset: " << offset;
@@ -121,6 +133,7 @@ int RegProblemLM::operator()(const Eigen::Matrix<double, 6, 1> &x, Eigen::Vector
     return 0;
 }
 
+// add
 void RegProblemLM::thread(Job &job) const {
     // load info from job
     ResidualItems                &vRI         = *job.pvRI_;
@@ -162,8 +175,17 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     fjac.resize(m_values, 6);
 
     // J_x = dPi_dT * dT_dInvPi * dInvPi_dx
-    Eigen::Matrix3d dT_dInvPi =
-        R_.transpose(); // Explaination for the transpose() can be found below.
+    // origin
+    // Eigen::Matrix3d dT_dInvPi =
+    //     R_.transpose(); // Explaination for the transpose() can be found below.
+
+    // change 2
+    Eigen::Matrix4d T_left_ref   = Eigen::Matrix4d::Identity();
+    T_left_ref.block<3, 3>(0, 0) = R_.transpose();
+    T_left_ref.block<3, 1>(0, 3) = -R_.transpose() * t_;
+    // T_left_ref                   = camSysPtr_->T_C_B_ * T_left_ref.eval() * camSysPtr_->T_B_C_;
+
+    Eigen::Matrix3d             dT_dInvPi = T_left_ref.block<3, 3>(0, 0);
     Eigen::Matrix<double, 3, 2> dInvPi_dx_constPart;
     dInvPi_dx_constPart.setZero();
     dInvPi_dx_constPart(0, 0)               = 1.0 / camSysPtr_->cam_left_ptr_->P_(0, 0);
@@ -173,11 +195,8 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     // J_theta = dPi_dT * dT_dG * dG_dtheta
     // Assemble the Jacobian without dG_dtheta.
     Eigen::MatrixXd fjacBlock;
-    fjacBlock.resize(numPoints_, 12);
+    fjacBlock.resize(numPoints_, 6);
     Eigen::MatrixXd fjacTMP(3, 6); // FOR Test
-    Eigen::Matrix4d T_left_ref   = Eigen::Matrix4d::Identity();
-    T_left_ref.block<3, 3>(0, 0) = R_.transpose();
-    T_left_ref.block<3, 1>(0, 3) = -R_.transpose() * t_;
 
     const double P11 = camSysPtr_->cam_left_ptr_->P_(0, 0);
     const double P12 = camSysPtr_->cam_left_ptr_->P_(0, 1);
@@ -190,7 +209,7 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
         Eigen::Vector2d     x1_s;
         const ResidualItem &ri = ResItemsStochSampled_[i];
         if (!reprojection(ri.p_, T_left_ref, x1_s))
-            fjacBlock.row(i) = Eigen::Matrix<double, 1, 12>::Zero();
+            fjacBlock.row(i) = Eigen::Matrix<double, 1, 6>::Zero();
         else {
             // obtain the exact gradient by bilinear interpolation.
             Eigen::MatrixXd gx, gy;
@@ -206,21 +225,33 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
             dPi_dT(0, 2)             = -(P11 * ri.p_(0) + P12 * ri.p_(1) + P14) / z2;
             dPi_dT(1, 2)             = -(P21 * ri.p_(0) + P22 * ri.p_(1) + P24) / z2;
 
+            // origin
             // assemble dT_dG
-            Eigen::Matrix<double, 3, 12> dT_dG;
-            dT_dG.setZero();
-            dT_dG.block<3, 3>(0, 0) = ri.p_(0) * Eigen::Matrix3d::Identity();
-            dT_dG.block<3, 3>(0, 3) = ri.p_(1) * Eigen::Matrix3d::Identity();
-            dT_dG.block<3, 3>(0, 6) = ri.p_(2) * Eigen::Matrix3d::Identity();
-            dT_dG.block<3, 3>(0, 9) = Eigen::Matrix3d::Identity();
-            //      LOG(INFO) << "dT_dG:\n" << dT_dG;
+            // Eigen::Matrix<double, 3, 12> dT_dG;
+            // dT_dG.setZero();
+            // dT_dG.block<3, 3>(0, 0) = ri.p_(0) * Eigen::Matrix3d::Identity();
+            // dT_dG.block<3, 3>(0, 3) = ri.p_(1) * Eigen::Matrix3d::Identity();
+            // dT_dG.block<3, 3>(0, 6) = ri.p_(2) * Eigen::Matrix3d::Identity();
+            // dT_dG.block<3, 3>(0, 9) = Eigen::Matrix3d::Identity();
+            // //  LOG(INFO) << "dT_dG:\n" << dT_dG;
+
+            // fjacBlock.row(i) =
+            //     grad.transpose() * dPi_dT * J_constPart * dPi_dT * dT_dG *
+            //     ri.p_(2); // ri.p_(2) refers to 1/rho_i which is actually coming with dInvPi_dx.
+
+            // change 1
+            Eigen::Matrix<double, 3, 6> dT_dTheta;
+            Eigen::Vector3d             temp_v = R_.transpose() * (ri.p_ - t_);
+            dT_dTheta.block<3, 3>(0, 0)        = skewSymmetric(temp_v);
+            dT_dTheta.block<3, 3>(0, 3)        = -R_.transpose();
+
             fjacBlock.row(i) =
-                grad.transpose() * dPi_dT * J_constPart * dPi_dT * dT_dG *
-                ri.p_(2); // ri.p_(2) refers to 1/rho_i which is actually coming with dInvPi_dx.
+                grad.transpose() * dPi_dT * J_constPart * dPi_dT * dT_dTheta * ri.p_(2);
         }
     }
     // assemble with dG_dtheta
-    fjac = -fjacBlock * J_G_0_;
+    // fjac = -fjacBlock * J_G_0_;
+    fjac = fjacBlock;
     // The explanation for the factor -1 is as follows. The transformation recovered from dThetha
     // is T_ref_cur (R_, t_). However, the one used for warping is T_cur_ref (R_.transpose(),
     // -R.transpose() * t). Thus, R_.transpose() is used as dT_dInvPi. Besides, J_theta = dPi_dT *
@@ -316,28 +347,41 @@ void RegProblemLM::getWarpingTransformation(Eigen::Matrix4d                   &w
     Eigen::Vector3d dt = x.block<3, 1>(3, 0);
     // add rotation
     Eigen::Matrix3d                   dR   = tools::cayley2rot(dc);
-    Eigen::Matrix3d                   newR = R_.transpose() * dR.transpose();
+    Eigen::Matrix3d                   newR = dR.transpose() * R_.transpose();
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(newR, Eigen::ComputeFullU | Eigen::ComputeFullV);
     R_cur_ref = svd.matrixU() * svd.matrixV().transpose();
     if (R_cur_ref.determinant() < 0.0) {
         LOG(INFO) << "oops the matrix is left-handed\n";
         exit(-1);
     }
-    t_cur_ref                       = -R_cur_ref * (dt + dR * t_);
+    // origin
+    // t_cur_ref                       = -R_cur_ref * (dt + dR * t_);
+
+    // change 1
+    t_cur_ref = -dR.transpose() * (R_ * t_ + dt);
+
+    // change 2
+    // Eigen ::Matrix4d T_bj_bi  = Eigen::Matrix4d::Identity();
+    // T_bj_bi.block<3, 3>(0, 0) = R_cur_ref;
+    // T_bj_bi.block<3, 1>(0, 3) = t_cur_ref;
+
     warpingTransf.block<3, 3>(0, 0) = R_cur_ref;
     warpingTransf.block<3, 1>(0, 3) = t_cur_ref;
+    // warpingTransf = camSysPtr_->T_C_B_ * T_bj_bi * camSysPtr_->T_B_C_; // T_cj_ci
 }
 
 void RegProblemLM::addMotionUpdate(const Eigen::Matrix<double, 6, 1> &dx) {
     // To update R_, t_
     Eigen::Vector3d dc = dx.block<3, 1>(0, 0);
     Eigen::Vector3d dt = dx.block<3, 1>(3, 0);
-    // add rotation
+    // 右乘
     Eigen::Matrix3d                   dR   = tools::cayley2rot(dc);
-    Eigen::Matrix3d                   newR = dR * R_;
+    Eigen::Matrix3d                   newR = R_ * dR;
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(newR, Eigen::ComputeFullU | Eigen::ComputeFullV);
-    R_ = svd.matrixU() * svd.matrixV().transpose();
-    t_ = dt + dR * t_;
+    newR = svd.matrixU() * svd.matrixV().transpose();
+    // t_   = dt + newR * R_.transpose() * t_;
+    t_ = newR.transpose() * dR.transpose() * (R_ * t_ + dt);
+    R_ = newR;
 }
 
 void RegProblemLM::setPose() {

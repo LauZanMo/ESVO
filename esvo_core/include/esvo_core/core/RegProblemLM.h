@@ -125,8 +125,11 @@ struct RegProblemLM : public optimization::OptimizationFunctor<double> {
 
     Eigen::Matrix<double, 4, 4> T_world_left_; // to record the current pose
     Eigen::Matrix<double, 4, 4> T_world_ref_;  // to record the ref pose (local ref map)
-    Eigen::Matrix3d             R_;            // R_ref_cur_;
-    Eigen::Vector3d             t_;            // t_ref_cur
+    Eigen::Matrix<double, 4, 4> T_w_bi_, T_w_bj_;
+    Eigen::Matrix3d             R_; // R_bi_bj
+    Eigen::Vector3d             t_; // t_bi_bj
+    Eigen::Matrix3d             R_ref_cur_;
+    Eigen::Vector3d             t_ref_cur_;
 
     // Jacobian Constant
     Eigen::Matrix<double, 12, 6> J_G_0_;

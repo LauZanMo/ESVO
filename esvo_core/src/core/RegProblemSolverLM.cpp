@@ -1,5 +1,6 @@
 #include <esvo_core/core/RegProblemSolverLM.h>
 #include <esvo_core/tools/cayley.h>
+#include <ceres/ceres.h>
 
 #ifdef SAVE_DUBUG_INFO
 #include <evaluation/DebugValueSaver.h>
@@ -151,6 +152,7 @@ bool RegProblemSolverLM::solve_analytical() {
     while (true) {
         if (iteration >= rpConfigPtr_->MAX_ITERATION_)
             break;
+        // 一次只取一小部分数据用于计算
         regProblemPtr_->setStochasticSampling((iteration % regProblemPtr_->numBatches_) *
                                                   rpConfigPtr_->BATCH_SIZE_,
                                               rpConfigPtr_->BATCH_SIZE_);
