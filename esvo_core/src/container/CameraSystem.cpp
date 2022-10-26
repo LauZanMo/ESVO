@@ -168,7 +168,7 @@ void CameraSystem::loadCalibInfo(const std::string &cameraSystemDir, bool bPrint
 
     YAML::Node          T_B_C_Info = leftCamCalibInfo["T_B_C"];
     std::vector<double> vT_C_B;
-    if (T_B_C_Info) {
+    if (T_B_C_Info.IsDefined()) {
         vT_C_B = T_B_C_Info["data"].as<std::vector<double>>();
         T_B_C_ = Eigen::Matrix<double, 4, 4, Eigen::RowMajor>(vT_C_B.data());
         T_C_B_.setZero();

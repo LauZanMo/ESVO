@@ -1,6 +1,5 @@
 #include <esvo_core/core/RegProblemSolverLM.h>
 #include <esvo_core/tools/cayley.h>
-#include <ceres/ceres.h>
 
 #ifdef SAVE_DUBUG_INFO
 #include <evaluation/DebugValueSaver.h>
