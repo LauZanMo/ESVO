@@ -5,6 +5,7 @@
 
 #include <image_transport/image_transport.h>
 #include <ros/ros.h>
+#include <sensor_msgs/Imu.h>
 
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/exact_time.h>
@@ -13,6 +14,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <esvo_core/container/CameraSystem.h>
+#include <esvo_core/container/ImuHandler.h>
 #include <esvo_core/core/RegProblemLM.h>
 #include <esvo_core/core/RegProblemSolverLM.h>
 #include <esvo_core/tools/Visualization.h>
@@ -55,6 +57,7 @@ public:
     void timeSurfaceCallback(const sensor_msgs::ImageConstPtr &time_surface_left,
                              const sensor_msgs::ImageConstPtr &time_surface_right);
     void eventsCallback(const dvs_msgs::EventArray::ConstPtr &msg);
+    void imuCallback(const sensor_msgs::Imu::ConstPtr &msg);
 
     // results
     void publishPose(const ros::Time &t, Transformation &tr);
@@ -68,6 +71,12 @@ public:
     bool getPoseAt(const ros::Time           &t,
                    esvo_core::Transformation &Tr, // T_world_something
                    const std::string         &source_frame);
+    int  gyro_propagation(const ImuMeasurements &imu_measurements,
+                          const ImuCalibration  &imu_calib,
+                          Eigen::Quaterniond    &R_WS,
+                          const Eigen::Vector3d &gyro_bias,
+                          const double          &t_start,
+                          const double          &t_end);
 
 private:
     ros::NodeHandle                 nh_, pnh_;
@@ -78,6 +87,7 @@ private:
     ros::Subscriber                                 map_sub_;
     message_filters::Subscriber<sensor_msgs::Image> TS_left_sub_, TS_right_sub_;
     ros::Subscriber                                 stampedPose_sub_;
+    ros::Subscriber                                 imu_sub_;
     image_transport::Publisher                      reprojMap_pub_left_;
 
     // publishers
@@ -111,6 +121,13 @@ private:
     RefPointCloudMap                 refPCMap_;
     RefFrame                         ref_;
     CurFrame                         cur_;
+    ImuHandler::Ptr                  imu_handler_;
+    Eigen::Vector3d                  gyro_bias_;
+    // ImuParameters                    imu_params_;
+    // SpeedAndBias speed_and_bias_;
+
+    bool   have_prev_time_ = false;
+    double prev_time_      = 0.0;
 
     /**** offline parameters ***/
     size_t      tracking_rate_hz_;

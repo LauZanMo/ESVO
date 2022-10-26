@@ -19,7 +19,7 @@
 #include <utility>
 
 //#define ESVO_CORE_MAPPING_DEBUG
-#define ESVO_CORE_MAPPING_LOG
+// #define ESVO_CORE_MAPPING_LOG
 
 namespace esvo_core {
 esvo_Mapping::esvo_Mapping(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
@@ -476,7 +476,7 @@ bool esvo_Mapping::dataTransferring() {
 
     // load current Time-Surface Observation
     auto it_end = TS_history_.rbegin();
-    it_end++; // in case that the tf is behind the most current TS.
+    std::advance(it_end, 2); // in case that the tf is behind the most current TS.
     auto it_begin = TS_history_.begin();
     while (TS_obs_.second.isEmpty()) {
         Transformation tr;

@@ -4,6 +4,7 @@
     <rosparam param="/use_sim_time">true</rosparam>
 
     <arg name="cam_config_file" default="$(find esvo_time_surface)/cfg/tum_vie_B.yaml"/>
+    <arg name="imu_config_file" default="$(find esvo_core)/calib/tum/imu.yaml"/>
 
     <!-- Time surfaces generation -->
     <node name="TimeSurface_left" pkg="esvo_time_surface" type="esvo_time_surface">
@@ -70,7 +71,7 @@
         <rosparam param="world_frame_id">"map"</rosparam>
         <rosparam param="calibInfoDir" subst_value="true">$(arg calibInfoDirStr)</rosparam>
 
-        <param name="cam_config_file" value="$(arg cam_config_file)" />
+        <param name="imu_config_file" value="$(arg imu_config_file)" />
 
         <rosparam command="load" file="$(find esvo_core)/cfg/tracking/tracking_tum.yaml" />
     </node>

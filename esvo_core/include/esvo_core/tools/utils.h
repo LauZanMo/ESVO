@@ -37,6 +37,13 @@ typedef pcl::PointCloud<pcl::PointXYZ> PointCloud;
 using RefPointCloudMap = std::map<ros::Time, PointCloud::Ptr>;
 
 using Transformation = kindr::minimal::QuatTransformation;
+using Quaternion     = kindr::minimal::RotationQuaternion;
+
+static Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d &vector) {
+    Eigen::Matrix3d mat;
+    mat << 0, -vector(2), vector(1), vector(2), 0, -vector(0), -vector(1), vector(0), 0;
+    return mat;
+}
 
 inline static std::vector<dvs_msgs::Event *>::iterator
 EventVecPtr_lower_bound(std::vector<dvs_msgs::Event *> &vEventPtr, ros::Time &t) {

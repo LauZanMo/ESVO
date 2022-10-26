@@ -2,11 +2,12 @@
 #include <esvo_core/tools/TicToc.h>
 #include <esvo_core/tools/params_helper.h>
 #include <minkindr_conversions/kindr_tf.h>
+#include <sensor_msgs/Imu.h>
 #include <sys/stat.h>
 #include <tf/transform_broadcaster.h>
 
-//#define ESVO_CORE_TRACKING_DEBUG
-//#define ESVO_CORE_TRACKING_DEBUG
+// #define ESVO_CORE_TRACKING_DEBUG
+// #define ESVO_CORE_TRACKING_LOG
 
 namespace esvo_core {
 esvo_Tracking::esvo_Tracking(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
@@ -58,6 +59,17 @@ esvo_Tracking::esvo_Tracking(const ros::NodeHandle &nh, const ros::NodeHandle &n
     stampedPose_sub_ = nh_.subscribe("stamped_pose", 0, &esvo_Tracking::stampedPoseCallback,
                                      this); // for accessing the pose of the ref view.
 
+    if (pnh_.hasParam("imu_config_file")) {
+        std::string       imu_config_file = tools::param(pnh_, "imu_config_file", std::string(""));
+        ImuCalibration    imu_calib       = ImuHandler::loadCalibrationFromFile(imu_config_file);
+        ImuInitialization imu_init        = ImuHandler::loadInitializationFromFile(imu_config_file);
+        LOG(INFO) << "acc_bias" << imu_init.acc_bias;
+        IMUHandlerOptions imu_options;
+        imu_handler_ = std::make_shared<esvo_core::ImuHandler>(imu_calib, imu_init, imu_options);
+        imu_sub_     = nh_.subscribe("imu", 200, &esvo_Tracking::imuCallback, this);
+        gyro_bias_   = Eigen::Vector3d::Zero();
+    }
+
     /*** For Visualization and Test ***/
     reprojMap_pub_left_ = it_.advertise("Reproj_Map_Left", 1);
     rpSolver_.setRegPublisher(&reprojMap_pub_left_);
@@ -76,7 +88,7 @@ void esvo_Tracking::TrackingLoop() {
     ros::Rate r(tracking_rate_hz_);
     while (ros::ok()) {
         // Keep Idling
-        if (refPCMap_.size() < 1 || TS_history_.size() < 1) {
+        if (refPCMap_.size() < 1 || TS_history_.size() < 2) {
             r.sleep();
             continue;
         }
@@ -99,9 +111,10 @@ void esvo_Tracking::TrackingLoop() {
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (ref_.t_.toSec() < refPCMap_.rbegin()->first.toSec()) // new reference map arrived
                 refDataTransferring();
-            if (cur_.t_.toSec() < TS_history_.rbegin()->first.toSec()) // new observation arrived
+            auto ts_it = std::next(TS_history_.rbegin()); // 比实际时间晚一帧，以获得足够的imu数据
+            if (cur_.t_.toSec() < ts_it->first.toSec()) // new observation arrived
             {
-                if (ref_.t_.toSec() >= TS_history_.rbegin()->first.toSec()) {
+                if (ref_.t_.toSec() >= ts_it->first.toSec()) {
                     LOG(INFO) << "The time_surface observation should be obtained after the "
                                  "reference frame";
                     exit(-1);
@@ -226,7 +239,7 @@ bool esvo_Tracking::refDataTransferring() {
 bool esvo_Tracking::curDataTransferring() {
     // load current observation
     auto ev_last_it = EventBuffer_lower_bound(events_left_, cur_.t_);
-    auto TS_it      = TS_history_.rbegin();
+    auto TS_it      = std::next(TS_history_.rbegin());
 
     // TS_history may not be updated before the tracking loop excutes the data transfering
     if (cur_.t_ == TS_it->first)
@@ -243,7 +256,21 @@ bool esvo_Tracking::curDataTransferring() {
     }
     if (ESVO_System_Status_ == "WORKING" ||
         (ESVO_System_Status_ == "INITIALIZATION" && ets_ == WORKING)) {
-        cur_.tr_ = Transformation(T_world_cur_);
+        ImuMeasurements ms;
+        auto            t = cur_.t_.toSec();
+        imu_handler_->getMeasurementsContainingEdges(t, ms, true);
+        auto T_WS = Transformation(T_world_cur_) * Transformation(camSysPtr_->T_C_B_);
+        if (!have_prev_time_) {
+            have_prev_time_ = true;
+        } else {
+            Eigen::Quaterniond q_WS(T_WS.getRotationMatrix());
+            // LOG(INFO) << "q_WS before: " << q_WS.coeffs().transpose();
+            gyro_propagation(ms, imu_handler_->imu_calib_, q_WS, gyro_bias_, prev_time_, t);
+            // LOG(INFO) << "q_WS after: " << q_WS.coeffs().transpose();
+            T_WS = Transformation(q_WS, T_WS.getPosition());
+        }
+        prev_time_ = t;
+        cur_.tr_   = T_WS * Transformation(camSysPtr_->T_B_C_);
         //    LOG(INFO) << "(WORKING) Assign cur's ("<< cur_.t_.toNSec() << ") pose with
         //    T_world_cur.";
     }
@@ -260,6 +287,7 @@ void esvo_Tracking::reset() {
     TS_history_.clear();
     refPCMap_.clear();
     events_left_.clear();
+    imu_handler_->reset();
 }
 
 /********************** Callback functions *****************************/
@@ -326,6 +354,17 @@ void esvo_Tracking::timeSurfaceCallback(const sensor_msgs::ImageConstPtr &time_s
     }
 }
 
+void esvo_Tracking::imuCallback(const sensor_msgs::Imu::ConstPtr &msg) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    ImuMeasurement              m;
+    m.timestamp_ = msg->header.stamp.toSec();
+    m.angular_velocity_ =
+        Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
+    m.linear_acceleration_ = Eigen::Vector3d(msg->linear_acceleration.x, msg->linear_acceleration.y,
+                                             msg->linear_acceleration.z);
+    imu_handler_->addImuMeasurement(m);
+}
+
 void esvo_Tracking::stampedPoseCallback(const geometry_msgs::PoseStampedConstPtr &msg) {
     std::lock_guard<std::mutex> lock(data_mutex_);
     // add pose to tf
@@ -353,6 +392,128 @@ bool esvo_Tracking::getPoseAt(const ros::Time           &t,
         tf::transformTFToKindr(st, &Tr);
         return true;
     }
+}
+
+// to make things a bit faster than using angle-axis conversion:
+__inline__ double sinc(double x) {
+    if (fabs(x) > 1e-6) {
+        return sin(x) / x;
+    } else {
+        static const double c_2 = 1.0 / 6.0;
+        static const double c_4 = 1.0 / 120.0;
+        static const double c_6 = 1.0 / 5040.0;
+        const double        x_2 = x * x;
+        const double        x_4 = x_2 * x_2;
+        const double        x_6 = x_2 * x_2 * x_2;
+        return 1.0 - c_2 * x_2 + c_4 * x_4 - c_6 * x_6;
+    }
+}
+
+int esvo_Tracking::gyro_propagation(const ImuMeasurements &imu_measurements,
+                                    const ImuCalibration  &imu_calib,
+                                    Eigen::Quaterniond    &R_WS,
+                                    const Eigen::Vector3d &gyro_bias,
+                                    const double          &t_start,
+                                    const double          &t_end) {
+    const double t_start_adjusted = t_start - imu_calib.delay_imu_cam;
+    const double t_end_adjusted   = t_end - imu_calib.delay_imu_cam;
+
+    // sanity check:
+    assert(imu_measurements.back().timestamp_ <= t_start_adjusted);
+    if (!(imu_measurements.front().timestamp_ >= t_end_adjusted)) {
+        assert(false);
+        return -1; // nothing to do...
+    }
+
+    // increments (initialise with identity)
+    Eigen::Quaterniond Delta_q(1, 0, 0, 0);
+
+    double Delta_t        = 0;
+    bool   has_started    = false;
+    int    num_propagated = 0;
+
+    double time = t_start_adjusted;
+    for (size_t i = imu_measurements.size() - 1; i != 0u; --i) {
+        Eigen::Vector3d omega_S_0 = imu_measurements[i].angular_velocity_;
+        Eigen::Vector3d acc_S_0   = imu_measurements[i].linear_acceleration_;
+        Eigen::Vector3d omega_S_1 = imu_measurements[i - 1].angular_velocity_;
+        Eigen::Vector3d acc_S_1   = imu_measurements[i - 1].linear_acceleration_;
+        double          nexttime  = imu_measurements[i - 1].timestamp_;
+
+        // time delta
+        double dt = nexttime - time;
+
+        // 下一个imu数据时间戳大于结束时间，按比例内插
+        if (t_end_adjusted < nexttime) {
+            double interval = nexttime - imu_measurements[i].timestamp_;
+            nexttime        = t_end_adjusted;
+            dt              = nexttime - time;
+            const double r  = dt / interval;
+            omega_S_1       = ((1.0 - r) * omega_S_0 + r * omega_S_1).eval();
+            acc_S_1         = ((1.0 - r) * acc_S_0 + r * acc_S_1).eval();
+        }
+
+        if (dt <= 0.0) {
+            continue;
+        }
+        Delta_t += dt;
+
+        // 刚开始，第一个imu数据时间戳小于开始时间，按比例内插
+        if (!has_started) {
+            has_started    = true;
+            const double r = dt / (nexttime - imu_measurements[i].timestamp_);
+            omega_S_0      = (r * omega_S_0 + (1.0 - r) * omega_S_1).eval();
+            acc_S_0        = (r * acc_S_0 + (1.0 - r) * acc_S_1).eval();
+        }
+
+        // ensure integrity
+        double sigma_g_c = imu_calib.gyro_noise_density;
+        double sigma_a_c = imu_calib.acc_noise_density;
+        {
+            if (std::abs(omega_S_0[0]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_0[1]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_0[2]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[0]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[1]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[2]) > imu_calib.saturation_omega_max) {
+                sigma_g_c *= 100;
+                LOG(WARNING) << "gyr saturation";
+            }
+
+            if (std::abs(acc_S_0[0]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_0[1]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_0[2]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[0]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[1]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[2]) > imu_calib.saturation_accel_max) {
+                sigma_a_c *= 100;
+                LOG(WARNING) << "acc saturation";
+            }
+        }
+
+        // actual propagation
+        // orientation:
+        Eigen::Quaterniond    dq;
+        const Eigen::Vector3d omega_S_true    = (0.5 * (omega_S_0 + omega_S_1) - gyro_bias);
+        const double          theta_half      = omega_S_true.norm() * 0.5 * dt;
+        const double          sinc_theta_half = sinc(theta_half);
+        const double          cos_theta_half  = cos(theta_half);
+        dq.vec()                              = sinc_theta_half * omega_S_true * 0.5 * dt;
+        dq.w()                                = cos_theta_half;
+        Delta_q                               = Delta_q * dq;
+
+        // memory shift
+        time = nexttime;
+        ++num_propagated;
+
+        if (nexttime == t_end_adjusted)
+            break;
+    }
+
+    // actual propagation output:
+    R_WS = R_WS * Delta_q;
+    R_WS.normalize();
+    return num_propagated;
 }
 
 /************ publish results *******************/
