@@ -7,8 +7,8 @@ patch_size_X: 1
 patch_size_Y: 1
 kernelSize: 0
 MAX_REGISTRATION_POINTS: 4000
-BATCH_SIZE: 300
-MAX_ITERATION: 10
+BATCH_SIZE: 600
+MAX_ITERATION: 20
 LSnorm: Huber #Huber #L2, Huber
 huber_threshold: 50 #50
 MIN_NUM_EVENTS: 1000
@@ -16,3 +16,4 @@ RegProblemType: 1 # 0 numerical, 1 analytical
 SAVE_TRAJECTORY: False
 PATH_TO_SAVE_TRAJECTORY: "/home/zhouyi/Desktop/ESVO_result/dsec_zurich_city_04_b/"
 VISUALIZE_TRAJECTORY: True
+use_imu: True

@@ -4,7 +4,7 @@
     <!-- ROS BAG -->
     <rosparam param="/use_sim_time">true</rosparam>
     <node pkg="rosbag" type="play" name="play" output="screen" required="true"
-        args="/home/ubuntu/Dataset/dvs/tum_vie/loop_floor1/loop-floor1-events_1.bag -r 0.05 -s 0 --clock">
+        args="/home/ubuntu/Dataset/dvs/tum_vie/loop_floor1/loop-floor1-events_1.bag -r 0.05 -s 10 --clock">
         <!-- MODIFY THE ABOVE DIRECTORY -->
         <!-- bike_hard/bike-hard-events_1.bag -r 0.05 -s 35 -->
         <!-- bike_hard/bike-hard-events.bag -r 0.02 -s 0 -->
