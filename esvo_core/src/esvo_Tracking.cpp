@@ -31,12 +31,27 @@ esvo_Tracking::esvo_Tracking(const ros::NodeHandle &nh, const ros::NodeHandle &n
                                         tools::param(pnh_, "BATCH_SIZE", 200),
                                         tools::param(pnh_, "MAX_ITERATION", 10))),
       rpType_((RegProblemType)((size_t)tools::param(pnh_, "RegProblemType", 0))),
-      rpSolver_(camSysPtr_, rpConfigPtr_, rpType_, NUM_THREAD_TRACKING),
       ESVO_System_Status_("INITIALIZATION"),
       ets_(IDLE) {
     // offline data
     dvs_frame_id_   = tools::param(pnh_, "dvs_frame_id", std::string("dvs"));
     world_frame_id_ = tools::param(pnh_, "world_frame_id", std::string("world"));
+    use_imu_        = tools::param(pnh_, "use_imu", false);
+
+    if (pnh_.hasParam("imu_config_file") && use_imu_) {
+        std::string       imu_config_file = tools::param(pnh_, "imu_config_file", std::string(""));
+        ImuCalibration    imu_calib       = ImuHandler::loadCalibrationFromFile(imu_config_file);
+        ImuInitialization imu_init        = ImuHandler::loadInitializationFromFile(imu_config_file);
+        IMUHandlerOptions imu_options;
+        imu_handler_ = std::make_shared<esvo_core::ImuHandler>(imu_calib, imu_init, imu_options);
+        imu_sub_     = nh_.subscribe("imu", 200, &esvo_Tracking::imuCallback, this);
+        gyro_bias_.setZero();
+    } else {
+        use_imu_ = false;
+    }
+
+    rpSolver_ = std::make_shared<RegProblemSolverLM>(camSysPtr_, rpConfigPtr_, rpType_,
+                                                     NUM_THREAD_TRACKING, imu_handler_);
 
     /**** online parameters ***/
     tracking_rate_hz_     = tools::param(pnh_, "tracking_rate_hz", 100);
@@ -59,20 +74,9 @@ esvo_Tracking::esvo_Tracking(const ros::NodeHandle &nh, const ros::NodeHandle &n
     stampedPose_sub_ = nh_.subscribe("stamped_pose", 0, &esvo_Tracking::stampedPoseCallback,
                                      this); // for accessing the pose of the ref view.
 
-    if (pnh_.hasParam("imu_config_file")) {
-        std::string       imu_config_file = tools::param(pnh_, "imu_config_file", std::string(""));
-        ImuCalibration    imu_calib       = ImuHandler::loadCalibrationFromFile(imu_config_file);
-        ImuInitialization imu_init        = ImuHandler::loadInitializationFromFile(imu_config_file);
-        LOG(INFO) << "acc_bias" << imu_init.acc_bias;
-        IMUHandlerOptions imu_options;
-        imu_handler_ = std::make_shared<esvo_core::ImuHandler>(imu_calib, imu_init, imu_options);
-        imu_sub_     = nh_.subscribe("imu", 200, &esvo_Tracking::imuCallback, this);
-        gyro_bias_   = Eigen::Vector3d::Zero();
-    }
-
     /*** For Visualization and Test ***/
     reprojMap_pub_left_ = it_.advertise("Reproj_Map_Left", 1);
-    rpSolver_.setRegPublisher(&reprojMap_pub_left_);
+    rpSolver_->setRegPublisher(&reprojMap_pub_left_);
 
     /*** Tracker ***/
     T_world_cur_ = Eigen::Matrix<double, 4, 4>::Identity();
@@ -131,24 +135,41 @@ void esvo_Tracking::TrackingLoop() {
 #ifdef ESVO_CORE_TRACKING_DEBUG
         tt.tic();
 #endif
-        if (rpSolver_.resetRegProblem(&ref_, &cur_)) {
+        if (ets_ == IDLE) {
+            ets_ = WORKING;
+            if (ESVO_System_Status_ != "WORKING")
+                nh_.setParam("/ESVO_SYSTEM_STATUS", "WORKING");
+
+            if (use_imu_) {
+                // 丢弃ref之前的imu数据
+                auto ms_it = imu_ref_cur_.end() - 1;
+                for (; ms_it != imu_ref_cur_.begin(); ms_it--) {
+                    if ((ms_it - 1)->timestamp_ > ref_.t_.toSec()) {
+                        ms_it++;
+                        break;
+                    }
+                }
+                imu_ref_cur_.erase(ms_it, imu_ref_cur_.end());
+            }
+
+            continue;
+        }
+        // LOG(INFO) << "imu_ref_cur_ size: " << imu_ref_cur_.size();
+        if (rpSolver_->resetRegProblem(&ref_, &cur_, &gyro_bias_, &imu_ref_cur_)) {
 #ifdef ESVO_CORE_TRACKING_DEBUG
             t_resetRegProblem = tt.toc();
             tt.tic();
 #endif
-            if (ets_ == IDLE)
-                ets_ = WORKING;
-            if (ESVO_System_Status_ != "WORKING")
-                nh_.setParam("/ESVO_SYSTEM_STATUS", "WORKING");
             if (rpType_ == REG_NUMERICAL)
-                rpSolver_.solve_numerical();
+                rpSolver_->solve_numerical();
             if (rpType_ == REG_ANALYTICAL)
-                rpSolver_.solve_analytical();
+                rpSolver_->solve_analytical();
 #ifdef ESVO_CORE_TRACKING_DEBUG
             t_solve = tt.toc();
             tt.tic();
 #endif
             T_world_cur_ = cur_.tr_.getTransformationMatrix();
+            // LOG(INFO) << "gyro_bias_: " << gyro_bias_.transpose();
             publishPose(cur_.t_, cur_.tr_);
             if (bVisualizeTrajectory_)
                 publishPath(cur_.t_, cur_.tr_);
@@ -181,7 +202,7 @@ void esvo_Tracking::TrackingLoop() {
                   << "%).";
         LOG(INFO) << "pub result: " << t_pub_result << " ms, ("
                   << t_pub_result / t_overall_count * 100 << "%).";
-        LOG(INFO) << "Total Computation (" << rpSolver_.lmStatics_.nPoints_
+        LOG(INFO) << "Total Computation (" << rpSolver_->lmStatics_.nPoints_
                   << "): " << t_overall_count << " ms.";
         LOG(INFO) << "------------------------------------------------------------";
         LOG(INFO) << "------------------------------------------------------------";
@@ -214,6 +235,18 @@ bool esvo_Tracking::refDataTransferring() {
         ref_.tr_.setIdentity();
     if (ESVO_System_Status_ == "WORKING" ||
         (ESVO_System_Status_ == "INITIALIZATION" && ets_ == WORKING)) {
+        if (use_imu_) {
+            // 丢弃ref之前的imu数据
+            auto ms_it = imu_ref_cur_.end() - 1;
+            for (; ms_it != imu_ref_cur_.begin(); ms_it--) {
+                if ((ms_it - 1)->timestamp_ > ref_.t_.toSec()) {
+                    ms_it++;
+                    break;
+                }
+            }
+            imu_ref_cur_.erase(ms_it, imu_ref_cur_.end());
+        }
+
         if (!getPoseAt(ref_.t_, ref_.tr_, dvs_frame_id_)) {
             LOG(INFO) << "ESVO_System_Status_: " << ESVO_System_Status_
                       << ", ref_.t_: " << ref_.t_.toNSec();
@@ -247,6 +280,17 @@ bool esvo_Tracking::curDataTransferring() {
     cur_.t_      = TS_it->first;
     cur_.pTsObs_ = &TS_it->second;
 
+    ImuMeasurements ms;
+    auto            t = cur_.t_.toSec();
+    if (use_imu_) {
+        imu_handler_->getMeasurementsContainingEdges(t, ms, true);
+        // 嵌入imu数据
+        if (imu_ref_cur_.size() > 2)
+            imu_ref_cur_.erase(imu_ref_cur_.begin(), imu_ref_cur_.begin() + 2);
+        for (auto ms_it = ms.rbegin(); ms_it != ms.rend(); ms_it++)
+            imu_ref_cur_.push_front(*ms_it);
+    }
+
     nh_.getParam("/ESVO_SYSTEM_STATUS", ESVO_System_Status_);
     if (ESVO_System_Status_ == "INITIALIZATION" && ets_ == IDLE) {
         cur_.tr_ = ref_.tr_;
@@ -256,24 +300,20 @@ bool esvo_Tracking::curDataTransferring() {
     }
     if (ESVO_System_Status_ == "WORKING" ||
         (ESVO_System_Status_ == "INITIALIZATION" && ets_ == WORKING)) {
-        ImuMeasurements ms;
-        auto            t = cur_.t_.toSec();
-        imu_handler_->getMeasurementsContainingEdges(t, ms, true);
-        auto T_WS = Transformation(T_world_cur_) * Transformation(camSysPtr_->T_C_B_);
-        if (!have_prev_time_) {
-            have_prev_time_ = true;
-        } else {
-            Eigen::Quaterniond q_WS(T_WS.getRotationMatrix());
-            // LOG(INFO) << "q_WS before: " << q_WS.coeffs().transpose();
+        auto               T_WS = Transformation(T_world_cur_) * Transformation(camSysPtr_->T_C_B_);
+        Eigen::Quaterniond q_WS(T_WS.getRotationMatrix());
+        // LOG(INFO) << "q_WS before: " << q_WS.coeffs().transpose();
+        if (use_imu_) {
             gyro_propagation(ms, imu_handler_->imu_calib_, q_WS, gyro_bias_, prev_time_, t);
-            // LOG(INFO) << "q_WS after: " << q_WS.coeffs().transpose();
-            T_WS = Transformation(q_WS, T_WS.getPosition());
         }
-        prev_time_ = t;
-        cur_.tr_   = T_WS * Transformation(camSysPtr_->T_B_C_);
+        // LOG(INFO) << "q_WS after: " << q_WS.coeffs().transpose();
+        T_WS     = Transformation(q_WS, T_WS.getPosition());
+        cur_.tr_ = T_WS * Transformation(camSysPtr_->T_B_C_);
         //    LOG(INFO) << "(WORKING) Assign cur's ("<< cur_.t_.toNSec() << ") pose with
         //    T_world_cur.";
     }
+
+    prev_time_ = t;
     // Count the number of events occuring since the last observation.
     auto ev_cur_it              = EventBuffer_lower_bound(events_left_, cur_.t_);
     cur_.numEventsSinceLastObs_ = std::distance(ev_last_it, ev_cur_it) + 1;
@@ -454,6 +494,7 @@ int esvo_Tracking::gyro_propagation(const ImuMeasurements &imu_measurements,
         }
 
         if (dt <= 0.0) {
+            LOG(WARNING) << "dt <= 0.0";
             continue;
         }
         Delta_t += dt;

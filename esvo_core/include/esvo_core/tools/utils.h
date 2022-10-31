@@ -45,6 +45,20 @@ static Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d &vector) {
     return mat;
 }
 
+template <typename Derived>
+static Eigen::Matrix<typename Derived::Scalar, 4, 4>
+Qleft(const Eigen::QuaternionBase<Derived> &q) {
+    Eigen::Quaternion<typename Derived::Scalar>   qq = q;
+    Eigen::Matrix<typename Derived::Scalar, 4, 4> ans;
+    ans(0, 0) = qq.w(), ans.template block<1, 3>(0, 1) = -qq.vec().transpose();
+    ans.template block<3, 1>(1, 0) = qq.vec(),
+                                ans.template block<3, 3>(1, 1) =
+                                    qq.w() *
+                                        Eigen::Matrix<typename Derived::Scalar, 3, 3>::Identity() +
+                                    skewSymmetric(qq.vec());
+    return ans;
+}
+
 inline static std::vector<dvs_msgs::Event *>::iterator
 EventVecPtr_lower_bound(std::vector<dvs_msgs::Event *> &vEventPtr, ros::Time &t) {
     return std::lower_bound(vEventPtr.begin(), vEventPtr.end(), t,

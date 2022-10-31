@@ -1,6 +1,7 @@
 #ifndef ESVO_CORE_CORE_REGPROBLEMSOLVERLM_H
 #define ESVO_CORE_CORE_REGPROBLEMSOLVERLM_H
 
+#include <esvo_core/container/ImuHandler.h>
 #include <esvo_core/core/RegProblemLM.h>
 #include <esvo_core/optimization/OptimizationFunctor.h>
 #include <esvo_core/tools/Visualization.h>
@@ -29,13 +30,19 @@ struct LM_statics {
 class RegProblemSolverLM {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    typedef std::shared_ptr<RegProblemSolverLM> Ptr;
+
     RegProblemSolverLM(CameraSystem::Ptr                 &camSysPtr,
                        std::shared_ptr<RegProblemConfig> &rpConfigPtr,
-                       RegProblemType                     rpType    = REG_NUMERICAL,
-                       size_t                             numThread = 1);
+                       RegProblemType                     rpType      = REG_NUMERICAL,
+                       size_t                             numThread   = 1,
+                       std::shared_ptr<ImuHandler>        imu_handler = nullptr);
     virtual ~RegProblemSolverLM();
 
-    bool resetRegProblem(RefFrame *ref, CurFrame *cur);
+    bool resetRegProblem(RefFrame        *ref,
+                         CurFrame        *cur,
+                         Eigen::Vector3d *gyro_bias,
+                         ImuMeasurements *ms_ref_cur);
     bool solve_numerical();  // relatively slower
     bool solve_analytical(); // faster
 
@@ -47,6 +54,7 @@ public:
 
 private:
     CameraSystem::Ptr                &camSysPtr_;
+    ImuHandler::Ptr                   imu_handler_;
     std::shared_ptr<RegProblemConfig> rpConfigPtr_;
     size_t                            NUM_THREAD_;
     RegProblemType                    rpType_;

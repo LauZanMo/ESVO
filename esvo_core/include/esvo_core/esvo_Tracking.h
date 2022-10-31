@@ -121,13 +121,12 @@ private:
     RefPointCloudMap                 refPCMap_;
     RefFrame                         ref_;
     CurFrame                         cur_;
-    ImuHandler::Ptr                  imu_handler_;
+    ImuHandler::Ptr                  imu_handler_ = nullptr;
     Eigen::Vector3d                  gyro_bias_;
-    // ImuParameters                    imu_params_;
-    // SpeedAndBias speed_and_bias_;
+    ImuMeasurements                  imu_ref_cur_;
 
-    bool   have_prev_time_ = false;
-    double prev_time_      = 0.0;
+    double prev_time_ = 0.0;
+    bool   use_imu_   = false;
 
     /**** offline parameters ***/
     size_t      tracking_rate_hz_;
@@ -141,11 +140,11 @@ private:
     Eigen::Matrix<double, 4, 4> T_world_cur_;
 
     /*** system objects ***/
-    RegProblemType        rpType_;
-    TrackingStatus        ets_;
-    std::string           ESVO_System_Status_;
-    RegProblemConfig::Ptr rpConfigPtr_;
-    RegProblemSolverLM    rpSolver_;
+    RegProblemType          rpType_;
+    TrackingStatus          ets_;
+    std::string             ESVO_System_Status_;
+    RegProblemConfig::Ptr   rpConfigPtr_;
+    RegProblemSolverLM::Ptr rpSolver_;
 };
 } // namespace esvo_core
 

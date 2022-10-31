@@ -2,6 +2,7 @@
 #define ESVO_CORE_CORE_REGPROBLEMLM_H
 
 #include <esvo_core/container/CameraSystem.h>
+#include <esvo_core/container/ImuHandler.h>
 #include <esvo_core/container/ResidualItem.h>
 #include <esvo_core/container/TimeSurfaceObservation.h>
 #include <esvo_core/optimization/OptimizationFunctor.h>
@@ -79,21 +80,26 @@ struct RegProblemLM : public optimization::OptimizationFunctor<double> {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     RegProblemLM(const CameraSystem::Ptr     &camSysPtr,
                  const RegProblemConfig::Ptr &rpConfig_ptr,
-                 size_t                       numThread = 1);
-    void setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad = false);
+                 size_t                       numThread   = 1,
+                 std::shared_ptr<ImuHandler>  imu_handler = nullptr);
+    void setProblem(RefFrame        *ref,
+                    CurFrame        *cur,
+                    bool             bComputeGrad = false,
+                    Eigen::Vector3d *gyro_bias    = nullptr,
+                    ImuMeasurements *ms_ref_cur   = nullptr);
     void setStochasticSampling(size_t offset, size_t N);
 
     void            getWarpingTransformation(Eigen::Matrix4d                   &warpingTransf,
-                                             const Eigen::Matrix<double, 6, 1> &x) const;
-    void            addMotionUpdate(const Eigen::Matrix<double, 6, 1> &dx);
+                                             const Eigen::Matrix<double, 9, 1> &x) const;
+    void            addMotionUpdate(const Eigen::Matrix<double, 9, 1> &dx);
     void            setPose();
     Eigen::Matrix4d getPose();
 
     // optimization
-    int  operator()(const Eigen::Matrix<double, 6, 1> &x, Eigen::VectorXd &fvec) const;
+    int  operator()(const Eigen::Matrix<double, 9, 1> &x, Eigen::VectorXd &fvec) const;
     void thread(Job &job) const;
-    int  df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac) const;
-    void computeJ_G(const Eigen::Matrix<double, 6, 1> &x, Eigen::Matrix<double, 12, 6> &J_G);
+    int  df(const Eigen::Matrix<double, 9, 1> &x, Eigen::MatrixXd &fjac) const;
+    // void computeJ_G(const Eigen::Matrix<double, 6, 1> &x, Eigen::Matrix<double, 12, 6> &J_G);
 
     // utils
     bool isValidPatch(Eigen::Vector2d &patchCentreCoord,
@@ -109,8 +115,16 @@ struct RegProblemLM : public optimization::OptimizationFunctor<double> {
                             const Eigen::Vector2d &location,
                             Eigen::MatrixXd       &patch,
                             bool                   debug = false) const;
+
+    int gyro_propagation(const ImuMeasurements &imu_measurements,
+                         const ImuCalibration  &imu_calib,
+                         Eigen::Quaterniond    &Delta_q,
+                         const Eigen::Vector3d &gyro_bias,
+                         const double          &t_start,
+                         const double          &t_end);
     //
     CameraSystem::Ptr     camSysPtr_;
+    ImuHandler::Ptr       imu_handler_;
     RegProblemConfig::Ptr rpConfigPtr_;
     size_t                patchSize_;
 
@@ -122,14 +136,24 @@ struct RegProblemLM : public optimization::OptimizationFunctor<double> {
     TimeSurfaceObservation *pTsObs_;
     RefFrame               *ref_;
     CurFrame               *cur_;
+    Eigen::Vector3d        *gyro_bias_;
+    ImuMeasurements        *ms_ref_cur_;
+
+    Eigen::Matrix<double, 6, 6> jacobian_;
+    Eigen::Matrix<double, 6, 6> covariance_;
+    Eigen::Matrix<double, 9, 9> noise_;
+    Eigen::Matrix<double, 6, 6> sqrt_info_;
 
     Eigen::Matrix<double, 4, 4> T_world_left_; // to record the current pose
     Eigen::Matrix<double, 4, 4> T_world_ref_;  // to record the ref pose (local ref map)
     Eigen::Matrix<double, 4, 4> T_w_bi_, T_w_bj_;
     Eigen::Matrix3d             R_bi_bj_; // R_bi_bj
     Eigen::Vector3d             t_bi_bj_; // t_bi_bj
-    Eigen::Matrix3d             R_; // R_ref_cur
-    Eigen::Vector3d             t_; // t_ref_cur
+    Eigen::Matrix3d             R_;       // R_ref_cur
+    Eigen::Vector3d             t_;       // t_ref_cur
+
+    Eigen::Quaterniond delta_q_;
+    Eigen::Vector3d    linearized_bg_;
 
     // Jacobian Constant
     Eigen::Matrix<double, 12, 6> J_G_0_;

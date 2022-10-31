@@ -176,6 +176,9 @@ void CameraSystem::loadCalibInfo(const std::string &cameraSystemDir, bool bPrint
         T_C_B_.block<3, 1>(0, 3) = -T_C_B_.block<3, 3>(0, 0) * T_B_C_.block<3, 1>(0, 3);
         T_C_B_(3, 3)             = 1;
         // LOG(INFO) << "T_C_B_ = " << std::endl << T_C_B_;
+    } else {
+        T_B_C_.setIdentity();
+        T_C_B_.setIdentity();
     }
 
     cam_left_ptr_->setIntrinsicParameters(width, height, cameraNameLeft, distortion_model, vD_left,

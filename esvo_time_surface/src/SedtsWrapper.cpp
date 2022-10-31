@@ -28,7 +28,7 @@ SedtsWrapper::SedtsWrapper(ros::NodeHandle &nh, ros::NodeHandle nh_private) : nh
     cam_              = ncam->getCameraShared(cam_idx_);
 
     TimeSurfaceOptions ts_options;
-    ts_options.ts_type         = TimeSurfaceType::ExponentialDecay;
+    ts_options.ts_type         = TimeSurfaceType::SEDTS;
     ts_options.tau_scale       = 8;
     ts_options.min_tau         = 50;
     ts_options.blur_type       = EVIO::TimeSurfaceBlurType::Median;

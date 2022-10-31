@@ -7,26 +7,41 @@ namespace esvo_core {
 namespace core {
 RegProblemLM::RegProblemLM(const CameraSystem::Ptr     &camSysPtr,
                            const RegProblemConfig::Ptr &rpConfig_ptr,
-                           size_t                       numThread)
-    : optimization::OptimizationFunctor<double>(6, 0),
+                           size_t                       numThread,
+                           ImuHandler::Ptr              imu_handler)
+    : optimization::OptimizationFunctor<double>(9, 0),
       camSysPtr_(camSysPtr),
       rpConfigPtr_(rpConfig_ptr),
       NUM_THREAD_(numThread),
+      imu_handler_(imu_handler),
       bPrint_(false) {
     patchSize_ = rpConfigPtr_->patchSize_X_ * rpConfigPtr_->patchSize_Y_;
-    computeJ_G(Eigen::Matrix<double, 6, 1>::Zero(), J_G_0_);
+    covariance_.setZero();
+    noise_.setZero();
+    if (imu_handler_ != nullptr) {
+        double gyr_noise         = imu_handler_->imu_calib_.gyro_noise_density;
+        double gyr_bias_noise    = imu_handler_->imu_calib_.gyro_bias_random_walk_sigma;
+        noise_.block<3, 3>(0, 0) = (gyr_noise * gyr_noise) * Eigen::Matrix3d::Identity();
+        noise_.block<3, 3>(3, 3) = (gyr_noise * gyr_noise) * Eigen::Matrix3d::Identity();
+        noise_.block<3, 3>(6, 6) = (gyr_bias_noise * gyr_bias_noise) * Eigen::Matrix3d::Identity();
+    }
 }
 
-void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
+void RegProblemLM::setProblem(RefFrame        *ref,
+                              CurFrame        *cur,
+                              bool             bComputeGrad,
+                              Eigen::Vector3d *gyro_bias,
+                              ImuMeasurements *ms_ref_cur) {
     ref_                       = ref;
     cur_                       = cur;
+    gyro_bias_                 = gyro_bias;
+    linearized_bg_             = *gyro_bias;
+    ms_ref_cur_                = ms_ref_cur;
     T_world_ref_               = ref_->tr_.getTransformationMatrix();
     T_world_left_              = cur_->tr_.getTransformationMatrix();
     Eigen::Matrix4d T_ref_left = T_world_ref_.inverse() * T_world_left_;
     R_                         = T_ref_left.block<3, 3>(0, 0);
     t_                         = T_ref_left.block<3, 1>(0, 3);
-    // R_                         = R_ref_cur_;
-    // t_                         = t_;
 
     T_w_bi_                  = T_world_ref_ * camSysPtr_->T_C_B_;
     T_w_bj_                  = T_world_left_ * camSysPtr_->T_C_B_;
@@ -36,6 +51,12 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
 
     Eigen::Matrix3d R_world_ref = T_world_ref_.block<3, 3>(0, 0);
     Eigen::Vector3d t_world_ref = T_world_ref_.block<3, 1>(0, 3);
+
+    if (imu_handler_ != nullptr) {
+        // 预积分
+        gyro_propagation(*ms_ref_cur, imu_handler_->imu_calib_, delta_q_, linearized_bg_,
+                         ref_->t_.toSec(), cur_->t_.toSec());
+    }
 
     // 根据ref点云初始化残差项
     ResItems_.clear();
@@ -55,7 +76,7 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
         Eigen::Vector3d p_tmp((double)ref->vPointXYZPtr_[i]->x, (double)ref->vPointXYZPtr_[i]->y,
                               (double)ref->vPointXYZPtr_[i]->z);
         Eigen::Vector3d p_cam = R_world_ref.transpose() * (p_tmp - t_world_ref);
-        ResItems_[i].initialize(p_cam(0), p_cam(1), p_cam(2)); //, var);
+        ResItems_[i].initialize(p_cam(0), p_cam(1), p_cam(2));
     }
     // 批量
     numBatches_ = std::max(ResItems_.size() / rpConfigPtr_->BATCH_SIZE_, (size_t)1);
@@ -67,7 +88,7 @@ void RegProblemLM::setProblem(RefFrame *ref, CurFrame *cur, bool bComputeGrad) {
         pTsObs_->computeTsNegativeGrad();
 
     // 设置残差项维数(add)
-    resetNumberValues(numPoints_ * patchSize_);
+    resetNumberValues(numPoints_ * patchSize_ + 6);
     if (bPrint_)
         LOG(INFO) << "RegProblemLM::setProblem succeeds.";
 }
@@ -82,7 +103,7 @@ void RegProblemLM::setStochasticSampling(size_t offset, size_t N) {
     }
     numPoints_ = ResItemsStochSampled_.size();
     // 设置残差项维数(add)
-    resetNumberValues(numPoints_ * patchSize_);
+    resetNumberValues(numPoints_ * patchSize_ + 6);
     if (bPrint_) {
         LOG(INFO) << "offset: " << offset;
         LOG(INFO) << "N: " << N;
@@ -91,7 +112,7 @@ void RegProblemLM::setStochasticSampling(size_t offset, size_t N) {
     }
 }
 
-int RegProblemLM::operator()(const Eigen::Matrix<double, 6, 1> &x, Eigen::VectorXd &fvec) const {
+int RegProblemLM::operator()(const Eigen::Matrix<double, 9, 1> &x, Eigen::VectorXd &fvec) const {
     // calculate the warping transformation (T_cur_ref))
     Eigen::Matrix4d T_warping = Eigen::Matrix4d::Identity();
     getWarpingTransformation(T_warping, x);
@@ -128,12 +149,22 @@ int RegProblemLM::operator()(const Eigen::Matrix<double, 6, 1> &x, Eigen::Vector
                 irls_weight = rpConfigPtr_->huber_threshold_ / ri.residual_(0);
             fvec[i] = sqrt(irls_weight) * ri.residual_(0);
         }
+
+        if (imu_handler_ != nullptr) {
+            // 计算imu残差
+            // 由于固定了参考帧，因此线性化点和参考帧点的bg相等，不需要矫正q
+            Eigen::Vector<double, 6> residuals;
+            residuals.segment<3>(0) = 2 * (delta_q_.inverse() * Eigen::Quaterniond(R_bi_bj_)).vec();
+            residuals.segment<3>(3) = *gyro_bias_ - linearized_bg_;
+            fvec.tail(6)            = sqrt_info_ * residuals;
+        } else {
+            fvec.tail(6).setZero();
+        }
     }
     //  LOG(INFO) << "assign weighted residual ..............";
     return 0;
 }
 
-// add
 void RegProblemLM::thread(Job &job) const {
     // load info from job
     ResidualItems                &vRI         = *job.pvRI_;
@@ -167,12 +198,12 @@ void RegProblemLM::thread(Job &job) const {
     }
 }
 
-int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac) const {
-    if (x != Eigen::Matrix<double, 6, 1>::Zero()) {
+int RegProblemLM::df(const Eigen::Matrix<double, 9, 1> &x, Eigen::MatrixXd &fjac) const {
+    if (x != Eigen::Matrix<double, 9, 1>::Zero()) {
         LOG(INFO) << "The Jacobian is not evaluated at Zero !!!!!!!!!!!!!";
         exit(-1);
     }
-    fjac.resize(m_values, 6);
+    fjac.resize(m_values, 9);
 
     // J_x = dPi_dT * dT_dInvPi * dInvPi_dx
     // origin
@@ -198,8 +229,7 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     // J_theta = dPi_dT * dT_dG * dG_dtheta
     // Assemble the Jacobian without dG_dtheta.
     Eigen::MatrixXd fjacBlock;
-    fjacBlock.resize(numPoints_, 6);
-    Eigen::MatrixXd fjacTMP(3, 6); // FOR Test
+    fjacBlock.resize(numPoints_, 9);
 
     const double P11 = camSysPtr_->cam_left_ptr_->P_(0, 0);
     const double P12 = camSysPtr_->cam_left_ptr_->P_(0, 1);
@@ -212,7 +242,7 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
         Eigen::Vector2d     x1_s;
         const ResidualItem &ri = ResItemsStochSampled_[i];
         if (!reprojection(ri.p_, T_left_ref, x1_s))
-            fjacBlock.row(i) = Eigen::Matrix<double, 1, 6>::Zero();
+            fjacBlock.row(i) = Eigen::Matrix<double, 1, 9>::Zero();
         else {
             // obtain the exact gradient by bilinear interpolation.
             Eigen::MatrixXd gx, gy;
@@ -243,10 +273,11 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
             //     ri.p_(2); // ri.p_(2) refers to 1/rho_i which is actually coming with dInvPi_dx.
 
             // change 1
-            Eigen::Matrix<double, 3, 6> dT_dTheta;
+            Eigen::Matrix<double, 3, 9> dT_dTheta;
             Eigen::Vector3d temp_v = R_bi_bj_.transpose() * (R_B_C * (ri.p_ + t_B_C) - t_bi_bj_);
             dT_dTheta.block<3, 3>(0, 0) = R_B_C.transpose() * skewSymmetric(temp_v);
             dT_dTheta.block<3, 3>(0, 3) = -R_B_C.transpose() * R_bi_bj_.transpose();
+            dT_dTheta.block<3, 3>(0, 6).setZero();
 
             fjacBlock.row(i) =
                 grad.transpose() * dPi_dT * J_constPart * dPi_dT * dT_dTheta * ri.p_(2);
@@ -254,7 +285,17 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     }
     // assemble with dG_dtheta
     // fjac = -fjacBlock * J_G_0_;
-    fjac = fjacBlock;
+    fjac.topRows(numPoints_) = fjacBlock;
+    // add
+    if (imu_handler_ != nullptr) {
+        Eigen::Matrix<double, 6, 9> preinte_jac = Eigen::Matrix<double, 6, 9>::Zero();
+        preinte_jac.block<3, 3>(0, 0) =
+            Qleft(delta_q_.inverse() * Eigen::Quaterniond(R_bi_bj_)).bottomRightCorner<3, 3>();
+        preinte_jac.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();
+        fjac.bottomRows(6)            = sqrt_info_ * preinte_jac;
+    } else {
+        fjac.bottomRows(6).setZero();
+    }
     // The explanation for the factor -1 is as follows. The transformation recovered from dThetha
     // is T_ref_cur (R_, t_). However, the one used for warping is T_cur_ref (R_.transpose(),
     // -R.transpose() * t). Thus, R_.transpose() is used as dT_dInvPi. Besides, J_theta = dPi_dT *
@@ -282,66 +323,8 @@ int RegProblemLM::df(const Eigen::Matrix<double, 6, 1> &x, Eigen::MatrixXd &fjac
     return 0;
 }
 
-void RegProblemLM::computeJ_G(const Eigen::Matrix<double, 6, 1> &x,
-                              Eigen::Matrix<double, 12, 6>      &J_G) {
-    assert(x.size() == 6);
-    assert(J_G.rows() == 12 && J_G.cols() == 6);
-    double c1, c2, c3, k;
-    double c1_sq, c2_sq, c3_sq, k_sq;
-    c1    = x(0);
-    c2    = x(1);
-    c3    = x(2);
-    c1_sq = pow(c1, 2);
-    c2_sq = pow(c2, 2);
-    c3_sq = pow(c3, 2);
-    k     = 1 + pow(c1, 2) + pow(c2, 2) + pow(c3, 2);
-    k_sq  = pow(k, 2);
-    Eigen::Matrix3d A1, A2, A3;
-    // A1
-    A1(0, 0) = 2 * c1 / k - 2 * c1 * (1 + c1_sq - c2_sq - c3_sq) / k_sq;
-    A1(0, 1) = -2 * c2 / k - 2 * c2 * (1 + c1_sq - c2_sq - c3_sq) / k_sq;
-    A1(0, 2) = -2 * c3 / k - 2 * c3 * (1 + c1_sq - c2_sq - c3_sq) / k_sq;
-    A1(1, 0) = 2 * c2 / k - 4 * c1 * (c1 * c2 + c3) / k_sq;
-    A1(1, 1) = 2 * c1 / k - 4 * c2 * (c1 * c2 + c3) / k_sq;
-    A1(1, 2) = 2 / k - 4 * c3 * (c1 * c2 + c3) / k_sq;
-    A1(2, 0) = 2 * c3 / k - 4 * c1 * (c1 * c3 - c2) / k_sq;
-    A1(2, 1) = -2 / k + 4 * c2 * (c1 * c3 - c2) / k_sq;
-    A1(2, 2) = 2 * c1 / k - 4 * c3 * (c1 * c3 - c2) / k_sq;
-    // A2
-    A2(0, 0) = 2 * c2 / k - 4 * c1 * (c1 * c2 - c3) / k_sq;
-    A2(0, 1) = 2 * c1 / k - 4 * c2 * (c1 * c2 - c3) / k_sq;
-    A2(0, 2) = -2 / k - 4 * c3 * (c1 * c2 - c3) / k_sq;
-    A2(1, 0) = -2 * c1 / k - 2 * c1 * (1 - c1_sq + c2_sq - c3_sq) / k_sq;
-    A2(1, 1) = 2 * c2 / k - 2 * c2 * (1 - c1_sq + c2_sq - c3_sq) / k_sq;
-    A2(1, 2) = -2 * c3 / k - 2 * c3 * (1 - c1_sq + c2_sq - c3_sq) / k_sq;
-    A2(2, 0) = 2 / k - 4 * c1 * (c1 + c2 * c3) / k_sq;
-    A2(2, 1) = 2 * c3 / k - 4 * c2 * (c1 + c2 * c3) / k_sq;
-    A2(2, 2) = 2 * c2 / k - 4 * c3 * (c1 + c2 * c3) / k_sq;
-    // A3
-    A3(0, 0) = 2 * c3 / k - 4 * c1 * (c2 + c1 * c3) / k_sq;
-    A3(0, 1) = 2 / k - 4 * c2 * (c2 + c1 * c3) / k_sq;
-    A3(0, 2) = 2 * c1 / k - 4 * c3 * (c2 + c1 * c3) / k_sq;
-    A3(1, 0) = -2 / k - 4 * c1 * (c2 * c3 - c1) / k_sq;
-    A3(1, 1) = 2 * c3 / k - 4 * c2 * (c2 * c3 - c1) / k_sq;
-    A3(1, 2) = 2 * c2 / k - 4 * c3 * (c2 * c3 - c1) / k_sq;
-    A3(2, 0) = -2 * c1 / k - 2 * c1 * (1 - c1_sq - c2_sq + c3_sq) / k_sq;
-    A3(2, 1) = -2 * c2 / k - 2 * c2 * (1 - c1_sq - c2_sq + c3_sq) / k_sq;
-    A3(2, 2) = 2 * c3 / k - 2 * c3 * (1 - c1_sq - c2_sq + c3_sq) / k_sq;
-
-    Eigen::Matrix3d O33   = Eigen::MatrixXd::Zero(3, 3);
-    Eigen::Matrix3d I33   = Eigen::MatrixXd::Identity(3, 3);
-    J_G.block<3, 3>(0, 0) = A1;
-    J_G.block<3, 3>(0, 3) = O33;
-    J_G.block<3, 3>(3, 0) = A2;
-    J_G.block<3, 3>(3, 3) = O33;
-    J_G.block<3, 3>(6, 0) = A3;
-    J_G.block<3, 3>(6, 3) = O33;
-    J_G.block<3, 3>(9, 0) = O33;
-    J_G.block<3, 3>(9, 3) = I33;
-}
-
 void RegProblemLM::getWarpingTransformation(Eigen::Matrix4d                   &warpingTransf,
-                                            const Eigen::Matrix<double, 6, 1> &x) const {
+                                            const Eigen::Matrix<double, 9, 1> &x) const {
     // To calcuate R_cur_ref, t_cur_ref
     Eigen::Matrix3d R_bj_bi;
     Eigen::Vector3d t_bj_bi;
@@ -373,10 +356,11 @@ void RegProblemLM::getWarpingTransformation(Eigen::Matrix4d                   &w
     warpingTransf = camSysPtr_->T_C_B_ * T_bj_bi * camSysPtr_->T_B_C_; // T_cj_ci
 }
 
-void RegProblemLM::addMotionUpdate(const Eigen::Matrix<double, 6, 1> &dx) {
+void RegProblemLM::addMotionUpdate(const Eigen::Matrix<double, 9, 1> &dx) {
     // To update R_bi_bj_, t_bi_bj_
-    Eigen::Vector3d dc = dx.block<3, 1>(0, 0);
-    Eigen::Vector3d dt = dx.block<3, 1>(3, 0);
+    Eigen::Vector3d dc  = dx.block<3, 1>(0, 0);
+    Eigen::Vector3d dt  = dx.block<3, 1>(3, 0);
+    Eigen::Vector3d dbg = dx.block<3, 1>(6, 0);
     // 右乘
     Eigen::Matrix3d                   dR   = tools::cayley2rot(dc);
     Eigen::Matrix3d                   newR = R_bi_bj_ * dR;
@@ -385,6 +369,9 @@ void RegProblemLM::addMotionUpdate(const Eigen::Matrix<double, 6, 1> &dx) {
     // t_   = dt + newR * R_.transpose() * t_;
     t_bi_bj_ = newR.transpose() * dR.transpose() * (R_bi_bj_ * t_bi_bj_ + dt);
     R_bi_bj_ = newR;
+    // update the bias
+    // LOG(INFO) << "dbg: " << dbg.transpose();
+    *gyro_bias_ += dbg;
 }
 
 void RegProblemLM::setPose() {
@@ -507,6 +494,146 @@ bool RegProblemLM::patchInterpolation(const Eigen::MatrixXd &img,
     // Compute F, size wy * wx.
     patch = q3 * R.block(0, 0, wy, wx) + q4 * R.block(1, 0, wy, wx);
     return true;
+}
+
+__inline__ double sinc(double x) {
+    if (fabs(x) > 1e-6) {
+        return sin(x) / x;
+    } else {
+        static const double c_2 = 1.0 / 6.0;
+        static const double c_4 = 1.0 / 120.0;
+        static const double c_6 = 1.0 / 5040.0;
+        const double        x_2 = x * x;
+        const double        x_4 = x_2 * x_2;
+        const double        x_6 = x_2 * x_2 * x_2;
+        return 1.0 - c_2 * x_2 + c_4 * x_4 - c_6 * x_6;
+    }
+}
+
+int RegProblemLM::gyro_propagation(const ImuMeasurements &imu_measurements,
+                                   const ImuCalibration  &imu_calib,
+                                   Eigen::Quaterniond    &Delta_q,
+                                   const Eigen::Vector3d &gyro_bias,
+                                   const double          &t_start,
+                                   const double          &t_end) {
+    const double t_start_adjusted = t_start - imu_calib.delay_imu_cam;
+    const double t_end_adjusted   = t_end - imu_calib.delay_imu_cam;
+
+    // sanity check:
+    assert(imu_measurements.back().timestamp_ <= t_start_adjusted);
+    if (!(imu_measurements.front().timestamp_ >= t_end_adjusted)) {
+        assert(false);
+        return -1; // nothing to do...
+    }
+
+    // increments (initialise with identity)
+    Delta_q.setIdentity();
+
+    // 雅克比和协方差重置
+    jacobian_.setIdentity();
+    covariance_.setZero();
+
+    double Delta_t        = 0;
+    bool   has_started    = false;
+    int    num_propagated = 0;
+
+    double time = t_start_adjusted;
+    for (size_t i = imu_measurements.size() - 1; i != 0u; --i) {
+        Eigen::Vector3d omega_S_0 = imu_measurements[i].angular_velocity_;
+        Eigen::Vector3d acc_S_0   = imu_measurements[i].linear_acceleration_;
+        Eigen::Vector3d omega_S_1 = imu_measurements[i - 1].angular_velocity_;
+        Eigen::Vector3d acc_S_1   = imu_measurements[i - 1].linear_acceleration_;
+        double          nexttime  = imu_measurements[i - 1].timestamp_;
+
+        // time delta
+        double dt = nexttime - time;
+
+        // 下一个imu数据时间戳大于结束时间，按比例内插
+        if (t_end_adjusted < nexttime) {
+            double interval = nexttime - imu_measurements[i].timestamp_;
+            nexttime        = t_end_adjusted;
+            dt              = nexttime - time;
+            const double r  = dt / interval;
+            omega_S_1       = ((1.0 - r) * omega_S_0 + r * omega_S_1).eval();
+            acc_S_1         = ((1.0 - r) * acc_S_0 + r * acc_S_1).eval();
+        }
+
+        if (dt <= 0.0) {
+            LOG(WARNING) << "dt <= 0.0";
+            continue;
+        }
+        Delta_t += dt;
+
+        // 刚开始，第一个imu数据时间戳小于开始时间，按比例内插
+        if (!has_started) {
+            has_started    = true;
+            const double r = dt / (nexttime - imu_measurements[i].timestamp_);
+            omega_S_0      = (r * omega_S_0 + (1.0 - r) * omega_S_1).eval();
+            acc_S_0        = (r * acc_S_0 + (1.0 - r) * acc_S_1).eval();
+        }
+
+        // ensure integrity
+        double sigma_g_c = imu_calib.gyro_noise_density;
+        double sigma_a_c = imu_calib.acc_noise_density;
+        {
+            if (std::abs(omega_S_0[0]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_0[1]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_0[2]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[0]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[1]) > imu_calib.saturation_omega_max ||
+                std::abs(omega_S_1[2]) > imu_calib.saturation_omega_max) {
+                sigma_g_c *= 100;
+                LOG(WARNING) << "gyr saturation";
+            }
+
+            if (std::abs(acc_S_0[0]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_0[1]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_0[2]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[0]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[1]) > imu_calib.saturation_accel_max ||
+                std::abs(acc_S_1[2]) > imu_calib.saturation_accel_max) {
+                sigma_a_c *= 100;
+                LOG(WARNING) << "acc saturation";
+            }
+        }
+
+        // actual propagation
+        // orientation:
+        Eigen::Quaterniond    dq;
+        const Eigen::Vector3d omega_S_true    = (0.5 * (omega_S_0 + omega_S_1) - gyro_bias);
+        const double          theta_half      = omega_S_true.norm() * 0.5 * dt;
+        const double          sinc_theta_half = sinc(theta_half);
+        const double          cos_theta_half  = cos(theta_half);
+        dq.vec()                              = sinc_theta_half * omega_S_true * 0.5 * dt;
+        dq.w()                                = cos_theta_half;
+        Delta_q                               = Delta_q * dq;
+
+        // jacobian
+        Eigen::Matrix<double, 6, 6> F = Eigen::Matrix<double, 6, 6>::Identity();
+        F.block<3, 3>(0, 0) -= skewSymmetric(omega_S_true);
+        F.block<3, 3>(0, 3) = -dt * Eigen::Matrix3d::Identity();
+
+        Eigen::Matrix<double, 6, 9> G = Eigen::Matrix<double, 6, 9>::Zero();
+        G.block<3, 3>(0, 0)           = 0.5 * dt * Eigen::Matrix3d::Identity();
+        G.block<3, 3>(0, 3)           = 0.5 * dt * Eigen::Matrix3d::Identity();
+        G.block<3, 3>(3, 6)           = dt * Eigen::Matrix3d::Identity();
+
+        jacobian_   = F * jacobian_;
+        covariance_ = F * covariance_ * F.transpose() + G * noise_ * G.transpose();
+
+        // memory shift
+        time = nexttime;
+        ++num_propagated;
+
+        if (nexttime == t_end_adjusted)
+            break;
+    }
+    sqrt_info_ =
+        Eigen::LLT<Eigen::Matrix<double, 6, 6>>(covariance_.inverse()).matrixL().transpose();
+
+    // actual propagation output:
+    Delta_q.normalize();
+    return num_propagated;
 }
 
 } // namespace core

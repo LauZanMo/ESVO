@@ -11,18 +11,22 @@ namespace core {
 RegProblemSolverLM::RegProblemSolverLM(esvo_core::CameraSystem::Ptr   &camSysPtr,
                                        shared_ptr<RegProblemConfig>   &rpConfigPtr,
                                        esvo_core::core::RegProblemType rpType,
-                                       size_t                          numThread)
+                                       size_t                          numThread,
+                                       ImuHandler::Ptr                 imu_handler)
     : camSysPtr_(camSysPtr),
       rpConfigPtr_(rpConfigPtr),
       rpType_(rpType),
       NUM_THREAD_(numThread),
+      imu_handler_(imu_handler),
       bPrint_(false),
       bVisualize_(true) {
     if (rpType_ == REG_NUMERICAL) {
-        numDiff_regProblemPtr_ = std::make_shared<Eigen::NumericalDiff<RegProblemLM>>(
-            camSysPtr_, rpConfigPtr_, NUM_THREAD_);
+        LOG(ERROR) << "Not support numerical!!!";
+        exit(-1);
+        // numDiff_regProblemPtr_ = std::make_shared<Eigen::NumericalDiff<RegProblemLM>>(
+        //     camSysPtr_, rpConfigPtr_, NUM_THREAD_, imu_handler_);
     } else if (rpType_ == REG_ANALYTICAL) {
-        regProblemPtr_ = std::make_shared<RegProblemLM>(camSysPtr_, rpConfigPtr_, NUM_THREAD_);
+        regProblemPtr_ = std::make_shared<RegProblemLM>(camSysPtr_, rpConfigPtr_, NUM_THREAD_, imu_handler_);
     } else {
         LOG(ERROR) << "Wrong Registration Problem Type is assigned!!!";
         exit(-1);
@@ -37,7 +41,10 @@ RegProblemSolverLM::RegProblemSolverLM(esvo_core::CameraSystem::Ptr   &camSysPtr
 
 RegProblemSolverLM::~RegProblemSolverLM() {}
 
-bool RegProblemSolverLM::resetRegProblem(RefFrame *ref, CurFrame *cur) {
+bool RegProblemSolverLM::resetRegProblem(RefFrame        *ref,
+                                         CurFrame        *cur,
+                                         Eigen::Vector3d *gyro_bias,
+                                         ImuMeasurements *ms_ref_cur) {
     if (cur->numEventsSinceLastObs_ < rpConfigPtr_->MIN_NUM_EVENTS_) {
         LOG(INFO) << "resetRegProblem RESET fails for no enough events coming in.";
         LOG(INFO) << "However, the system remains to work.";
@@ -53,7 +60,7 @@ bool RegProblemSolverLM::resetRegProblem(RefFrame *ref, CurFrame *cur) {
         //    LOG(INFO) << "numDiff_regProblemPtr_->setProblem(ref, cur, false) -----------------";
     }
     if (rpType_ == REG_ANALYTICAL) {
-        regProblemPtr_->setProblem(ref, cur, true);
+        regProblemPtr_->setProblem(ref, cur, true, gyro_bias, ms_ref_cur);
         //    LOG(INFO) << "regProblemPtr_->setProblem(ref, cur, true) -----------------";
     }
 
@@ -147,7 +154,7 @@ bool RegProblemSolverLM::solve_analytical() {
     size_t iteration = 0;
     size_t nfev      = 0;
 
-    std::vector<Eigen::Vector<double, 6>> iter_values;
+    std::vector<Eigen::Vector<double, 9>> iter_values;
     while (true) {
         if (iteration >= rpConfigPtr_->MAX_ITERATION_)
             break;
@@ -155,7 +162,7 @@ bool RegProblemSolverLM::solve_analytical() {
         regProblemPtr_->setStochasticSampling((iteration % regProblemPtr_->numBatches_) *
                                                   rpConfigPtr_->BATCH_SIZE_,
                                               rpConfigPtr_->BATCH_SIZE_);
-        Eigen::VectorXd x(6);
+        Eigen::VectorXd x(9);
         x.fill(0.0);
         if (lm.minimizeInit(x) == Eigen::LevenbergMarquardtSpace::ImproperInputParameters) {
             LOG(ERROR) << "ImproperInputParameters for LM (Tracking)." << std::endl;
