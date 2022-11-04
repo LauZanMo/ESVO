@@ -179,26 +179,30 @@ bool RegProblemSolverLM::solve_analytical() {
             break;
     }
 
-    if (!regProblemPtr_->gyro_bias_initialized_) {
+    if (!regProblemPtr_->gyro_bias_initialized_ && regProblemPtr_->imu_handler_ != nullptr) {
         GyroSolverStruct gss(regProblemPtr_->delta_q_, Eigen::Quaterniond(regProblemPtr_->R_bi_bj_),
                              regProblemPtr_->jacobian_.block<3, 3>(0, 3));
         gss_vec_.push_back(gss);
-        LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 / M_PI
-                  << "deg, " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).axis().transpose();
-        LOG(INFO) << "Integrate: "
-                  << Eigen::AngleAxisd(regProblemPtr_->delta_q_).angle() * 180 / M_PI << "deg, "
-                  << Eigen::AngleAxisd(regProblemPtr_->delta_q_).axis().transpose();
-        LOG(INFO) << "---";
+        // LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 /
+        // M_PI
+        //           << "deg, " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).axis().transpose();
+        // LOG(INFO) << "Integrate: "
+        //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).angle() * 180 / M_PI << "deg, "
+        //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).axis().transpose();
+        // LOG(INFO) << "---";
         if (gss_vec_.size() > 100) {
             regProblemPtr_->solveGyroBias(gss_vec_);
             LOG(INFO) << "Gyro bias initialized: " << regProblemPtr_->gyro_bias_->transpose();
         }
     } else {
-        // LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 / M_PI
+        // LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 /
+        // M_PI
         //           << "deg, " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).axis().transpose();
         // LOG(INFO) << "Integrate: "
         //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).angle() * 180 / M_PI << "deg, "
         //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).axis().transpose();
+        // LOG(INFO) << "jacobian: " << std::endl << regProblemPtr_->jacobian_;
+        // LOG(INFO) << "covariance: " << std::endl << regProblemPtr_->covariance_;
         // LOG(INFO) << "---";
     }
 

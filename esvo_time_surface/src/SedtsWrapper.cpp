@@ -33,7 +33,7 @@ SedtsWrapper::SedtsWrapper(ros::NodeHandle &nh, ros::NodeHandle nh_private) : nh
     cam_              = ncam->getCameraShared(cam_idx_);
 
     TimeSurfaceOptions ts_options;
-    ts_options.ts_type         = TimeSurfaceType::ExponentialDecay;
+    ts_options.ts_type         = TimeSurfaceType::SEDTS;
     ts_options.decay_sec       = decay_sec_;
     ts_options.tau_scale       = tau_scale_;
     ts_options.min_tau         = min_tau_;

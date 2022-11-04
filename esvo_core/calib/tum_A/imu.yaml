@@ -3,10 +3,10 @@ imu_params:
   max_imu_delta_t: 0.01
   acc_max: 150
   omega_max: 7.8
-  sigma_omega_c: 8.4503e-05
-  sigma_acc_c: 0.0012
-  sigma_omega_bias_c: 1.1961e-06
-  sigma_acc_bias_c: 2.2856e-05
+  sigma_omega_c: 0.004
+  sigma_acc_c: 0.04
+  sigma_omega_bias_c: 2.0e-5
+  sigma_acc_bias_c: 0.0004
   g: 9.81007
   imu_rate: 200.0
 

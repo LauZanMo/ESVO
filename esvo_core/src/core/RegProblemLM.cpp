@@ -275,7 +275,7 @@ int RegProblemLM::df(const Eigen::Matrix<double, 9, 1> &x, Eigen::MatrixXd &fjac
 
             // change 1
             Eigen::Matrix<double, 3, 9> dT_dTheta;
-            Eigen::Vector3d temp_v = R_bi_bj_.transpose() * (R_B_C * (ri.p_ + t_B_C) - t_bi_bj_);
+            Eigen::Vector3d temp_v      = R_bi_bj_.transpose() * (R_B_C * ri.p_ + t_B_C - t_bi_bj_);
             dT_dTheta.block<3, 3>(0, 0) = R_B_C.transpose() * skewSymmetric(temp_v);
             dT_dTheta.block<3, 3>(0, 3) = -R_B_C.transpose() * R_bi_bj_.transpose();
             dT_dTheta.block<3, 3>(0, 6).setZero();
@@ -607,7 +607,7 @@ int RegProblemLM::gyro_propagation(const ImuMeasurements &imu_measurements,
         // actual propagation
         // orientation:
         Eigen::Quaterniond    dq;
-        const Eigen::Vector3d omega_S_true    = (0.5 * (omega_S_0 + omega_S_1) - gyro_bias);
+        const Eigen::Vector3d omega_S_true    = 0.5 * (omega_S_0 + omega_S_1) - gyro_bias;
         const double          theta_half      = omega_S_true.norm() * 0.5 * dt;
         const double          sinc_theta_half = sinc(theta_half);
         const double          cos_theta_half  = cos(theta_half);
@@ -663,6 +663,8 @@ void RegProblemLM::solveGyroBias(std::vector<GyroSolverStruct> &gss_vec) {
         b += tmp_A.transpose() * tmp_b;
     }
 
+    LOG(INFO) << "A" << std::endl << A;
+    LOG(INFO) << "b" << std::endl << b.transpose();
     *gyro_bias_ += A.ldlt().solve(b);
     gyro_bias_initialized_ = true;
 }

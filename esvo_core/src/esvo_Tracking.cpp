@@ -312,7 +312,7 @@ bool esvo_Tracking::curDataTransferring() {
         Eigen::Quaterniond q_WS(T_WS.getRotationMatrix());
         // LOG(INFO) << "q_WS before: " << q_WS.coeffs().transpose();
         if (use_imu_) {
-            // gyro_propagation(ms, imu_handler_->imu_calib_, q_WS, gyro_bias_, prev_time_, t);
+            gyro_propagation(ms, imu_handler_->imu_calib_, q_WS, gyro_bias_, prev_time_, t);
         }
         // LOG(INFO) << "q_WS after: " << q_WS.coeffs().transpose();
         T_WS     = Transformation(q_WS, T_WS.getPosition());
