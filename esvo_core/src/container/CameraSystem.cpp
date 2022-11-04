@@ -166,6 +166,21 @@ void CameraSystem::loadCalibInfo(const std::string &cameraSystemDir, bool bPrint
 
     vT_right_left = leftCamCalibInfo["T_right_left"]["data"].as<std::vector<double>>();
 
+    YAML::Node          T_B_C_Info = leftCamCalibInfo["T_B_C"];
+    std::vector<double> vT_C_B;
+    if (T_B_C_Info.IsDefined()) {
+        vT_C_B = T_B_C_Info["data"].as<std::vector<double>>();
+        T_B_C_ = Eigen::Matrix<double, 4, 4, Eigen::RowMajor>(vT_C_B.data());
+        T_C_B_.setZero();
+        T_C_B_.block<3, 3>(0, 0) = T_B_C_.block<3, 3>(0, 0).transpose();
+        T_C_B_.block<3, 1>(0, 3) = -T_C_B_.block<3, 3>(0, 0) * T_B_C_.block<3, 1>(0, 3);
+        T_C_B_(3, 3)             = 1;
+        // LOG(INFO) << "T_C_B_ = " << std::endl << T_C_B_;
+    } else {
+        T_B_C_.setIdentity();
+        T_C_B_.setIdentity();
+    }
+
     cam_left_ptr_->setIntrinsicParameters(width, height, cameraNameLeft, distortion_model, vD_left,
                                           vK_left, vRectMat_left, vP_left);
     cam_right_ptr_->setIntrinsicParameters(width, height, cameraNameRight, distortion_model,

@@ -1,0 +1,19 @@
+imu_params:
+  delay_imu_cam: 0.0
+  max_imu_delta_t: 0.01
+  acc_max: 150
+  omega_max: 7.8
+  sigma_omega_c: 8.4503e-05
+  sigma_acc_c: 0.0012
+  sigma_omega_bias_c: 1.1961e-06
+  sigma_acc_bias_c: 2.2856e-05
+  g: 9.81007
+  imu_rate: 200.0
+
+imu_initialization:
+  velocity: [0, 0, 0]
+  omega_bias: [0, 0, 0]
+  acc_bias: [0, 0, 0]
+  velocity_sigma: 0.5
+  omega_bias_sigma: 0.005
+  acc_bias_sigma: 0.05

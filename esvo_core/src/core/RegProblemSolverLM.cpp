@@ -1,23 +1,33 @@
 #include <esvo_core/core/RegProblemSolverLM.h>
 #include <esvo_core/tools/cayley.h>
 
+#ifdef SAVE_DUBUG_INFO
+#include <evaluation/DebugValueSaver.h>
+int track_idx = 0;
+#endif
+
 namespace esvo_core {
 namespace core {
 RegProblemSolverLM::RegProblemSolverLM(esvo_core::CameraSystem::Ptr   &camSysPtr,
                                        shared_ptr<RegProblemConfig>   &rpConfigPtr,
                                        esvo_core::core::RegProblemType rpType,
-                                       size_t                          numThread)
+                                       size_t                          numThread,
+                                       ImuHandler::Ptr                 imu_handler)
     : camSysPtr_(camSysPtr),
       rpConfigPtr_(rpConfigPtr),
       rpType_(rpType),
       NUM_THREAD_(numThread),
+      imu_handler_(imu_handler),
       bPrint_(false),
       bVisualize_(true) {
     if (rpType_ == REG_NUMERICAL) {
-        numDiff_regProblemPtr_ = std::make_shared<Eigen::NumericalDiff<RegProblemLM>>(
-            camSysPtr_, rpConfigPtr_, NUM_THREAD_);
+        LOG(ERROR) << "Not support numerical!!!";
+        exit(-1);
+        // numDiff_regProblemPtr_ = std::make_shared<Eigen::NumericalDiff<RegProblemLM>>(
+        //     camSysPtr_, rpConfigPtr_, NUM_THREAD_, imu_handler_);
     } else if (rpType_ == REG_ANALYTICAL) {
-        regProblemPtr_ = std::make_shared<RegProblemLM>(camSysPtr_, rpConfigPtr_, NUM_THREAD_);
+        regProblemPtr_ =
+            std::make_shared<RegProblemLM>(camSysPtr_, rpConfigPtr_, NUM_THREAD_, imu_handler_);
     } else {
         LOG(ERROR) << "Wrong Registration Problem Type is assigned!!!";
         exit(-1);
@@ -32,7 +42,10 @@ RegProblemSolverLM::RegProblemSolverLM(esvo_core::CameraSystem::Ptr   &camSysPtr
 
 RegProblemSolverLM::~RegProblemSolverLM() {}
 
-bool RegProblemSolverLM::resetRegProblem(RefFrame *ref, CurFrame *cur) {
+bool RegProblemSolverLM::resetRegProblem(RefFrame        *ref,
+                                         CurFrame        *cur,
+                                         Eigen::Vector3d *gyro_bias,
+                                         ImuMeasurements *ms_ref_cur) {
     if (cur->numEventsSinceLastObs_ < rpConfigPtr_->MIN_NUM_EVENTS_) {
         LOG(INFO) << "resetRegProblem RESET fails for no enough events coming in.";
         LOG(INFO) << "However, the system remains to work.";
@@ -48,7 +61,7 @@ bool RegProblemSolverLM::resetRegProblem(RefFrame *ref, CurFrame *cur) {
         //    LOG(INFO) << "numDiff_regProblemPtr_->setProblem(ref, cur, false) -----------------";
     }
     if (rpType_ == REG_ANALYTICAL) {
-        regProblemPtr_->setProblem(ref, cur, true);
+        regProblemPtr_->setProblem(ref, cur, true, gyro_bias, ms_ref_cur);
         //    LOG(INFO) << "regProblemPtr_->setProblem(ref, cur, true) -----------------";
     }
 
@@ -141,13 +154,16 @@ bool RegProblemSolverLM::solve_analytical() {
 
     size_t iteration = 0;
     size_t nfev      = 0;
+
+    std::vector<Eigen::Vector<double, 9>> iter_values;
     while (true) {
         if (iteration >= rpConfigPtr_->MAX_ITERATION_)
             break;
+        // 一次只取一小部分数据用于计算
         regProblemPtr_->setStochasticSampling((iteration % regProblemPtr_->numBatches_) *
                                                   rpConfigPtr_->BATCH_SIZE_,
                                               rpConfigPtr_->BATCH_SIZE_);
-        Eigen::VectorXd x(6);
+        Eigen::VectorXd x(9);
         x.fill(0.0);
         if (lm.minimizeInit(x) == Eigen::LevenbergMarquardtSpace::ImproperInputParameters) {
             LOG(ERROR) << "ImproperInputParameters for LM (Tracking)." << std::endl;
@@ -155,6 +171,7 @@ bool RegProblemSolverLM::solve_analytical() {
         }
         Eigen::LevenbergMarquardtSpace::Status status = lm.minimizeOneStep(x);
         regProblemPtr_->addMotionUpdate(x);
+        iter_values.push_back(x);
 
         iteration++;
         nfev += lm.nfev;
@@ -162,6 +179,30 @@ bool RegProblemSolverLM::solve_analytical() {
             break;
     }
 
+    if (!regProblemPtr_->gyro_bias_initialized_) {
+        GyroSolverStruct gss(regProblemPtr_->delta_q_, Eigen::Quaterniond(regProblemPtr_->R_bi_bj_),
+                             regProblemPtr_->jacobian_.block<3, 3>(0, 3));
+        gss_vec_.push_back(gss);
+        LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 / M_PI
+                  << "deg, " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).axis().transpose();
+        LOG(INFO) << "Integrate: "
+                  << Eigen::AngleAxisd(regProblemPtr_->delta_q_).angle() * 180 / M_PI << "deg, "
+                  << Eigen::AngleAxisd(regProblemPtr_->delta_q_).axis().transpose();
+        LOG(INFO) << "---";
+        if (gss_vec_.size() > 100) {
+            regProblemPtr_->solveGyroBias(gss_vec_);
+            LOG(INFO) << "Gyro bias initialized: " << regProblemPtr_->gyro_bias_->transpose();
+        }
+    } else {
+        // LOG(INFO) << "Solve: " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).angle() * 180 / M_PI
+        //           << "deg, " << Eigen::AngleAxisd(regProblemPtr_->R_bi_bj_).axis().transpose();
+        // LOG(INFO) << "Integrate: "
+        //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).angle() * 180 / M_PI << "deg, "
+        //           << Eigen::AngleAxisd(regProblemPtr_->delta_q_).axis().transpose();
+        // LOG(INFO) << "---";
+    }
+
+    cv::Mat_<uint8_t> proj_img, proj_img_init;
     /*************************** Visualization ************************/
     if (bVisualize_) // will slow down the tracker a little bit
     {
@@ -171,6 +212,7 @@ bool RegProblemSolverLM::solve_analytical() {
         cv::eigen2cv(regProblemPtr_->cur_->pTsObs_->TS_negative_left_, reprojMap_left);
         reprojMap_left.convertTo(reprojMap_left, CV_8UC1);
         cv::cvtColor(reprojMap_left, reprojMap_left, CV_GRAY2BGR);
+        cv::Mat reproj_map_left_init = reprojMap_left.clone();
 
         // project 3D points to current frame
         Eigen::Matrix3d R_cur_ref = regProblemPtr_->R_.transpose();
@@ -185,13 +227,37 @@ bool RegProblemSolverLM::solve_analytical() {
             double z = ri.p_[2];
             visualizor_.DrawPoint(1.0 / z, 1.0 / z_min_, 1.0 / z_max_,
                                   Eigen::Vector2d(p_img_left(0), p_img_left(1)), reprojMap_left);
+#ifdef SAVE_DUBUG_INFO
+            camSysPtr_->cam_left_ptr_->world2Cam(ri.p_, p_img_left);
+            visualizor_.DrawPoint(1.0 / z, 1.0 / z_min_, 1.0 / z_max_,
+                                  Eigen::Vector2d(p_img_left(0), p_img_left(1)),
+                                  reproj_map_left_init);
+#endif
         }
         std_msgs::Header header;
         header.stamp              = regProblemPtr_->cur_->t_;
         sensor_msgs::ImagePtr msg = cv_bridge::CvImage(header, "bgr8", reprojMap_left).toImageMsg();
         reprojMap_pub_->publish(msg);
+        proj_img      = reprojMap_left;
+        proj_img_init = reproj_map_left_init;
     }
     /*************************** Visualization ************************/
+
+#ifdef SAVE_DUBUG_INFO
+    Eigen::Vector<double, 6> final_values;
+    final_values.segment<3>(0) = tools::rot2cayley(regProblemPtr_->R_);
+    final_values.segment<3>(3) = regProblemPtr_->t_;
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/delta_" + std::to_string(track_idx),
+                 iter_values);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/final_" + std::to_string(track_idx),
+                 final_values);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/proj_map_" + std::to_string(track_idx),
+                 proj_img);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/proj_map_init_" + std::to_string(track_idx),
+                 proj_img_init);
+    H5Easy::dump(EVIO::DebugValueSaver::saver(), "track/size", ++track_idx,
+                 H5Easy::DumpMode::Overwrite);
+#endif
 
     regProblemPtr_->setPose();
     lmStatics_.nPoints_ = regProblemPtr_->numPoints_;

@@ -1,6 +1,12 @@
 use_sim_time: True
 ignore_polarity: True
 time_surface_mode: 0 # 0: Backward; 1: Forward
-decay_ms: 30
+decay_ms: 10
 median_blur_kernel_size: 1
 max_event_queue_len: 20
+
+decay_sec: 0.03
+tau_scale: 8.0
+min_tau: 50.0
+blur_size: 1
+ignore_polarity: True

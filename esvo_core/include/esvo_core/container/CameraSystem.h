@@ -58,6 +58,7 @@ public:
 
     PerspectiveCamera::Ptr      cam_left_ptr_, cam_right_ptr_; // intrinsics
     Eigen::Matrix<double, 3, 4> T_right_left_;                 // extrinsics
+    Eigen::Matrix<double, 4, 4> T_B_C_, T_C_B_;                // extrinsics
     double                      baseline_;
 };
 } // namespace container

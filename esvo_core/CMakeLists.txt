@@ -3,13 +3,34 @@ project(esvo_core)
 # explicitly set std=c++14 to remove errors from pcl library
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(SAVE_DUBUG "Save debug value as hdf5." OFF)
 # SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3")
 set(CMAKE_CXX_FLAGS "-O3")
+
+if (SAVE_DUBUG)
+  add_definitions(-DSAVE_DUBUG_INFO)
+endif()
 
 find_package(catkin_simple REQUIRED)
 catkin_simple(ALL_DEPS_REQUIRED)
 
+set(OpenCV_DIR "/usr/lib/x86_64-linux-gnu/cmake/opencv4/")
 find_package(OpenCV REQUIRED)
+
+find_path(ESVIO_INCLUDE_DIRS
+  NAMES ESVIO.h
+  PATHS
+    /home/ubuntu/Code/ESVIO/src/
+)
+
+find_library(ESVIO_LIBRARIES
+  NAMES ESVIO
+  PATHS 
+    /home/ubuntu/Code/ESVIO/lib/
+)
+
+find_package(HDF5 COMPONENTS CXX REQUIRED)
+find_package(HighFive REQUIRED)
 
 ###########
 ## Build ##
@@ -17,7 +38,8 @@ find_package(OpenCV REQUIRED)
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories(include)
+
+include_directories(include ${HDF5_INCLUDE_DIR} ${ESVIO_INCLUDE_DIRS})
 
 set(HEADERS
   include/esvo_core/core/DepthFusion.h
@@ -36,6 +58,8 @@ set(HEADERS
   include/esvo_core/container/DepthMap.h
   include/esvo_core/container/ResidualItem.h
   include/esvo_core/container/TimeSurfaceObservation.h
+  include/esvo_core/container/ImuCalibration.h
+  include/esvo_core/container/ImuHandler.h
   include/esvo_core/tools/Visualization.h
   include/esvo_core/tools/utils.h
   include/esvo_core/tools/TicToc.h
@@ -55,6 +79,7 @@ set(SOURCES
   src/container/CameraSystem.cpp
   src/container/DepthPoint.cpp
   src/container/ResidualItem.cpp
+  src/container/ImuHandler.cpp
   src/tools/Visualization.cpp
   src/tools/sobel.cpp
   src/tools/cayley.cpp)
@@ -65,13 +90,13 @@ cs_add_library(${PROJECT_NAME}_LIB ${SOURCES} ${HEADERS})
 cs_add_executable(esvo_Mapping src/esvo_MappingNode.cpp
     src/esvo_Mapping.cpp include/esvo_core/esvo_Mapping.h)
 target_link_libraries(esvo_Mapping ${PROJECT_NAME}_LIB
-    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
+    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp ${ESVIO_LIBRARIES} ${HDF5_CXX_LIBRARIES} HighFive)
 
 # Node esvo_Tracking
 cs_add_executable(esvo_Tracking src/esvo_TrackingNode.cpp
     src/esvo_Tracking.cpp include/esvo_core/esvo_Tracking.h)
 target_link_libraries(esvo_Tracking ${PROJECT_NAME}_LIB
-    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
+    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp ${ESVIO_LIBRARIES} ${HDF5_CXX_LIBRARIES} HighFive)
 
 # Node esvo_MVS (newly added in branch "mvs")
 cs_add_executable(esvo_MVStereo
@@ -79,4 +104,4 @@ cs_add_executable(esvo_MVStereo
     src/esvo_MVStereo.cpp
     include/esvo_core/esvo_MVStereo.h)
 target_link_libraries(esvo_MVStereo ${PROJECT_NAME}_LIB
-    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp)
+    ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp ${ESVIO_LIBRARIES} ${HDF5_CXX_LIBRARIES} HighFive)

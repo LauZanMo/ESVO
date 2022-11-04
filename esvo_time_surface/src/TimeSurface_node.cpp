@@ -1,3 +1,4 @@
+#include <esvo_time_surface/SedtsWrapper.h>
 #include <esvo_time_surface/TimeSurface.h>
 
 int main(int argc, char *argv[]) {
@@ -6,7 +7,8 @@ int main(int argc, char *argv[]) {
     ros::NodeHandle nh;
     ros::NodeHandle nh_private("~");
 
-    esvo_time_surface::TimeSurface ts(nh, nh_private);
+    // esvo_time_surface::TimeSurface ts(nh, nh_private);
+    EVIO::SedtsWrapper ts(nh, nh_private);
 
     ros::spin();
 
